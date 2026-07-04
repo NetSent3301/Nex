@@ -6,6 +6,9 @@ dist/
 build/
 .venv/
 .env
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
 # Node
 node_modules/
@@ -20,10 +23,16 @@ out/
 .DS_Store
 Thumbs.db
 
+# Build / Temp
+frontend/dist/
+
 # Nex
 backend/config.toml
 backend/.env
 backend/.nex_keys.json
 backend/.nex_settings.json
 backend/storage/.nex_history*.json
-backend/tools/__pycache__/
+
+# Project snapshots / generated docs
+nex_project_structure.txt
+DOCUMENTATION.md
