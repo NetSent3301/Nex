@@ -11,18 +11,261 @@
   </style>
 </head>
 <body>
-  <!-- ⚙️ SETTINGS (gear icon + dropdown) -->
+  <!-- ⚙️ SETTINGS (gear icon) -->
   <button class="settings-btn fixed top-4 right-4 z-50" id="settings-trigger" aria-label="Configuración">
     <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
       <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
     </svg>
   </button>
 
-  <div class="settings-dropdown" id="settings-dropdown">
-    <label>Curvatura de interfaz</label>
-    <div class="slider-row">
-      <input type="range" id="radius-slider" min="0" max="24" value="12" />
-      <span class="slider-value" id="radius-value">12px</span>
+  <!-- ⚙️ SETTINGS MODAL -->
+  <div id="settings-overlay">
+    <div id="settings-modal">
+      <div class="settings-modal-header">
+        <div>
+          <h2 class="settings-modal-title">Configuración</h2>
+          <p class="settings-modal-subtitle">Personaliza Nex a tu medida</p>
+        </div>
+        <button id="settings-close-btn" class="settings-modal-close" aria-label="Cerrar configuración">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </div>
+
+      <div class="settings-modal-body">
+        <!-- Sidebar nav -->
+        <nav class="settings-nav">
+          <button class="settings-nav-item active" data-section="general">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+            General
+          </button>
+          <button class="settings-nav-item" data-section="chat">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Chat
+          </button>
+          <button class="settings-nav-item" data-section="provider">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2 2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/><path d="M6.12 9.24a2 2 0 1 1 2.83-2.83l1.41 1.41a2 2 0 1 1-2.83 2.83z"/><path d="M4 12a2 2 0 0 1 2-2h12a2 2 0 0 1 0 4H6a2 2 0 0 1-2-2z"/></svg>
+            Proveedor
+          </button>
+          <button class="settings-nav-item" data-section="keys">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+            API Keys
+          </button>
+          <button class="settings-nav-item" data-section="system">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
+            Sistema
+          </button>
+          <button class="settings-nav-item" data-section="data">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+            Datos
+          </button>
+        </nav>
+
+        <!-- Content panels -->
+        <div class="settings-panels">
+
+          <!-- GENERAL -->
+          <div class="settings-panel active" id="panel-general">
+            <h3 class="panel-title">Apariencia</h3>
+
+            <div class="setting-row">
+              <label class="setting-label">Tema</label>
+              <select id="setting-theme" class="setting-select">
+                <option value="dark">Oscuro</option>
+                <option value="light">Claro</option>
+                <option value="system">Sistema</option>
+              </select>
+            </div>
+
+            <div class="setting-row">
+              <label class="setting-label">Idioma</label>
+              <select id="setting-language" class="setting-select">
+                <option value="es">Español</option>
+                <option value="en">English</option>
+              </select>
+            </div>
+
+            <div class="setting-row">
+              <label class="setting-label">Tamaño de fuente</label>
+              <div class="setting-slider-row">
+                <input type="range" id="setting-font-size" min="12" max="20" step="1" value="14" />
+                <span class="setting-slider-value" id="font-size-value">14px</span>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <label class="setting-label">Curvatura</label>
+              <div class="setting-slider-row">
+                <input type="range" id="setting-radius" min="0" max="24" step="1" value="12" />
+                <span class="setting-slider-value" id="radius-value">12px</span>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <label class="setting-label">Animaciones</label>
+              <label class="toggle">
+                <input type="checkbox" id="setting-animations" checked />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- CHAT -->
+          <div class="settings-panel" id="panel-chat">
+            <h3 class="panel-title">Comportamiento del chat</h3>
+
+            <div class="setting-row">
+              <label class="setting-label">Temperatura</label>
+              <div class="setting-slider-row">
+                <input type="range" id="setting-temperature" min="0" max="2" step="0.05" value="0.7" />
+                <span class="setting-slider-value" id="temperature-value">0.70</span>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <label class="setting-label">Top P</label>
+              <div class="setting-slider-row">
+                <input type="range" id="setting-top-p" min="0" max="1" step="0.05" value="0.95" />
+                <span class="setting-slider-value" id="top-p-value">0.95</span>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <label class="setting-label">Máx. tokens</label>
+              <input type="number" id="setting-max-tokens" class="setting-input" value="8192" min="256" max="128000" step="1" />
+            </div>
+
+            <div class="setting-row">
+              <label class="setting-label">Enviar con</label>
+              <select id="setting-send-mode" class="setting-select">
+                <option value="enter">Enter</option>
+                <option value="ctrl_enter">Ctrl+Enter</option>
+              </select>
+            </div>
+
+            <div class="setting-row">
+              <label class="setting-label">Auto-scroll</label>
+              <label class="toggle">
+                <input type="checkbox" id="setting-auto-scroll" checked />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+
+            <div class="setting-row">
+              <label class="setting-label">Timestamps</label>
+              <label class="toggle">
+                <input type="checkbox" id="setting-timestamps" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+
+            <div class="setting-row">
+              <label class="setting-label">Resaltado sintaxis</label>
+              <label class="toggle">
+                <input type="checkbox" id="setting-syntax-highlighting" checked />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- PROVIDER -->
+          <div class="settings-panel" id="panel-provider">
+            <h3 class="panel-title">Proveedor LLM</h3>
+
+            <div class="setting-row">
+              <label class="setting-label">Proveedor</label>
+              <select id="setting-provider" class="setting-select"></select>
+            </div>
+
+            <div class="setting-row">
+              <label class="setting-label">Modelo</label>
+              <select id="setting-model" class="setting-select">
+                <option value="">Cargando...</option>
+              </select>
+            </div>
+
+            <button id="refresh-models-btn" class="setting-btn" style="margin-bottom:14px">
+              ↻ Refrescar modelos
+            </button>
+
+            <h3 class="panel-title" style="margin-top:4px">URLs personalizadas</h3>
+
+            <div class="setting-row">
+              <label class="setting-label">OpenAI API</label>
+              <input type="text" id="setting-url-openai" class="setting-input" placeholder="https://api.openai.com/v1" />
+            </div>
+            <div class="setting-row">
+              <label class="setting-label">Ollama API</label>
+              <input type="text" id="setting-url-ollama" class="setting-input" placeholder="http://localhost:11434" />
+            </div>
+
+            <div class="setting-row">
+              <label class="setting-label">Timeout (seg)</label>
+              <input type="number" id="setting-timeout" class="setting-input" value="60" min="5" max="300" />
+            </div>
+          </div>
+
+          <!-- API KEYS -->
+          <div class="settings-panel" id="panel-keys">
+            <h3 class="panel-title">API Keys</h3>
+            <p class="panel-desc">Las keys se guardan en tu archivo .env local. Nunca se comparten.</p>
+
+            <div class="api-key-row">
+              <span class="api-key-label">Gemini</span>
+              <input type="password" id="key-gemini" class="setting-input" placeholder="AIza..." />
+            </div>
+            <div class="api-key-row">
+              <span class="api-key-label">OpenAI</span>
+              <input type="password" id="key-openai" class="setting-input" placeholder="sk-..." />
+            </div>
+            <div class="api-key-row">
+              <span class="api-key-label">Anthropic</span>
+              <input type="password" id="key-anthropic" class="setting-input" placeholder="sk-ant-..." />
+            </div>
+            <div class="api-key-row">
+              <span class="api-key-label">DeepSeek</span>
+              <input type="password" id="key-deepseek" class="setting-input" placeholder="sk-..." />
+            </div>
+
+            <button id="save-keys-btn" class="setting-btn" style="margin-top:4px">Guardar API Keys</button>
+            <span id="keys-saved-msg" class="setting-success-msg">✓ Keys guardadas</span>
+          </div>
+
+          <!-- SYSTEM -->
+          <div class="settings-panel" id="panel-system">
+            <h3 class="panel-title">Prompt de sistema</h3>
+            <p class="panel-desc">Instrucciones personalizadas para el comportamiento de Nex.</p>
+            <textarea id="setting-system-prompt" class="setting-textarea" rows="6" placeholder="Instrucciones personalizadas para Nex..."></textarea>
+
+            <h3 class="panel-title" style="margin-top:16px">Límites</h3>
+
+            <div class="setting-row">
+              <label class="setting-label">Máx. tool calls</label>
+              <input type="number" id="setting-max-tool-calls" class="setting-input" value="10" min="1" max="50" />
+            </div>
+
+            <div class="setting-row">
+              <label class="setting-label">Auto-guardado (seg)</label>
+              <input type="number" id="setting-auto-save" class="setting-input" value="60" min="5" max="600" />
+            </div>
+          </div>
+
+          <!-- DATA -->
+          <div class="settings-panel" id="panel-data">
+            <h3 class="panel-title">Gestión de datos</h3>
+            <p class="panel-desc">Exporta, importa o limpia tus datos de configuración.</p>
+
+            <button id="export-settings-btn" class="setting-btn">⬇ Exportar configuración</button>
+            <button id="import-settings-btn" class="setting-btn">⬆ Importar configuración</button>
+            <input type="file" id="import-file-input" accept=".json" style="display:none" />
+
+            <div class="setting-separator"></div>
+
+            <button id="clear-history-btn" class="setting-btn setting-btn-danger">🗑 Limpiar historial de chat</button>
+            <button id="reset-settings-btn" class="setting-btn setting-btn-danger">⚠ Restablecer configuración</button>
+          </div>
+
+        </div>
+      </div>
     </div>
   </div>
 

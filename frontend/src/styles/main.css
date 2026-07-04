@@ -107,7 +107,7 @@
     position: relative;
   }
 
-  /* ── SETTINGS ── */
+  /* ── SETTINGS GEAR BTN ── */
   .settings-btn {
     width: 36px;
     height: 36px;
@@ -129,46 +129,193 @@
     box-shadow: 0 0 30px rgba(99, 102, 241, 0.06);
   }
 
-  .settings-dropdown {
-    position: fixed;
-    top: 56px;
-    right: 16px;
-    width: 220px;
-    padding: 16px;
-    border-radius: var(--interface-radius, 14px);
-    background: rgba(15, 15, 18, 0.75);
-    backdrop-filter: blur(24px) saturate(180%);
-    -webkit-backdrop-filter: blur(24px) saturate(180%);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
-    z-index: 100;
+  /* ── SETTINGS MODAL ── */
+  #settings-overlay {
     display: none;
-    animation: fadeSlideIn 0.2s ease-out;
+    position: fixed;
+    inset: 0;
+    z-index: 999;
+    background: rgba(4, 5, 10, 0.65);
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s ease;
   }
-  .settings-dropdown.open { display: block; }
+  #settings-overlay.open { display: flex; opacity: 1; }
 
-  @keyframes fadeSlideIn {
-    from { opacity: 0; transform: translateY(-6px) scale(0.97); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
+  #settings-modal {
+    width: min(90vw, 780px);
+    height: min(85vh, 640px);
+    border-radius: var(--interface-radius, 16px);
+    background: rgba(12, 12, 18, 0.85);
+    backdrop-filter: blur(28px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: modalIn 0.25s ease-out;
   }
 
-  .settings-dropdown label {
-    display: block;
-    font-size: 11px;
+  @keyframes modalIn {
+    from { opacity: 0; transform: scale(0.97) translateY(10px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+  }
+
+  .settings-modal-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    flex-shrink: 0;
+  }
+
+  .settings-modal-title {
+    font-size: 16px;
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: rgba(255, 255, 255, 0.3);
-    margin-bottom: 10px;
+    color: rgba(255, 255, 255, 0.85);
+    margin: 0;
+    letter-spacing: -0.01em;
+  }
+  .settings-modal-subtitle {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.25);
+    margin: 2px 0 0;
   }
 
-  .settings-dropdown .slider-row {
+  .settings-modal-close {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.3);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+  }
+  .settings-modal-close:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.6);
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+
+  .settings-modal-body {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+  }
+
+  /* ── SETTINGS NAV (sidebar inside modal) ── */
+  .settings-nav {
+    width: 170px;
+    flex-shrink: 0;
+    padding: 12px 8px;
+    border-right: 1px solid rgba(255, 255, 255, 0.05);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow-y: auto;
+  }
+
+  .settings-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 12px;
+    border: none;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.3);
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    text-align: left;
+    font-family: inherit;
+  }
+  .settings-nav-item:hover {
+    color: rgba(255, 255, 255, 0.55);
+    background: rgba(255, 255, 255, 0.03);
+  }
+  .settings-nav-item.active {
+    color: rgba(99, 102, 241, 0.8);
+    background: rgba(99, 102, 241, 0.08);
+  }
+  .settings-nav-item svg { flex-shrink: 0; }
+
+  /* ── SETTINGS PANELS ── */
+  .settings-panels {
+    flex: 1;
+    padding: 20px 24px;
+    overflow-y: auto;
+  }
+
+  .settings-panel { display: none; }
+  .settings-panel.active { display: block; }
+
+  .panel-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.7);
+    margin: 0 0 14px;
+    letter-spacing: 0.02em;
+  }
+  .panel-desc {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.2);
+    margin: -8px 0 14px;
+    line-height: 1.5;
+  }
+
+  .setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    gap: 16px;
+  }
+
+  .setting-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.5);
+    flex-shrink: 0;
+    min-width: 100px;
+  }
+
+  .setting-select, .setting-input {
+    width: 200px;
+    padding: 7px 10px;
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 12px;
+    font-family: inherit;
+    outline: none;
+    transition: all 0.2s ease;
+  }
+  .setting-select:focus, .setting-input:focus {
+    border-color: rgba(99, 102, 241, 0.3);
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .setting-select option { background: #1a1a24; color: rgba(255, 255, 255, 0.8); }
+  .setting-input[type="number"] { width: 100px; }
+
+  .setting-slider-row {
     display: flex;
     align-items: center;
     gap: 10px;
+    width: 200px;
   }
-
-  .settings-dropdown .slider-row input[type="range"] {
+  .setting-slider-row input[type="range"] {
     -webkit-appearance: none;
     appearance: none;
     flex: 1;
@@ -178,7 +325,7 @@
     outline: none;
     cursor: pointer;
   }
-  .settings-dropdown .slider-row input[type="range"]::-webkit-slider-thumb {
+  .setting-slider-row input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
     width: 14px;
     height: 14px;
@@ -188,7 +335,7 @@
     box-shadow: 0 0 16px rgba(99, 102, 241, 0.3);
     border: 2px solid rgba(255, 255, 255, 0.1);
   }
-  .settings-dropdown .slider-row input[type="range"]::-moz-range-thumb {
+  .setting-slider-row input[type="range"]::-moz-range-thumb {
     width: 14px;
     height: 14px;
     border-radius: 50%;
@@ -197,13 +344,136 @@
     border: 2px solid rgba(255, 255, 255, 0.1);
   }
 
-  .settings-dropdown .slider-value {
+  .setting-slider-value {
     font-size: 12px;
     font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, monospace;
     color: rgba(255, 255, 255, 0.5);
-    min-width: 32px;
+    min-width: 36px;
     text-align: right;
   }
+
+  .setting-textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 12px;
+    font-family: "Cascadia Code", "Fira Code", Consolas, monospace;
+    outline: none;
+    resize: vertical;
+    min-height: 80px;
+    line-height: 1.5;
+    transition: all 0.2s ease;
+  }
+  .setting-textarea:focus {
+    border-color: rgba(99, 102, 241, 0.3);
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  /* ── TOGGLE SWITCH ── */
+  .toggle {
+    position: relative;
+    display: inline-block;
+    width: 36px;
+    height: 20px;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .toggle input { display: none; }
+
+  .toggle-slider {
+    position: absolute;
+    inset: 0;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 20px;
+    transition: all 0.25s ease;
+  }
+  .toggle-slider::before {
+    content: "";
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    left: 2px;
+    bottom: 2px;
+    background: rgba(255, 255, 255, 0.5);
+    border-radius: 50%;
+    transition: all 0.25s ease;
+  }
+  .toggle input:checked + .toggle-slider {
+    background: rgba(99, 102, 241, 0.6);
+  }
+  .toggle input:checked + .toggle-slider::before {
+    transform: translateX(16px);
+    background: #fff;
+  }
+
+  /* ── SETTINGS BUTTONS ── */
+  .setting-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    padding: 9px 14px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 12px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    margin-bottom: 8px;
+  }
+  .setting-btn:hover {
+    background: rgba(255, 255, 255, 0.07);
+    color: rgba(255, 255, 255, 0.7);
+    border-color: rgba(99, 102, 241, 0.2);
+  }
+
+  .setting-btn-danger {
+    color: rgba(239, 68, 68, 0.6);
+    border-color: rgba(239, 68, 68, 0.1);
+  }
+  .setting-btn-danger:hover {
+    background: rgba(239, 68, 68, 0.08);
+    color: rgba(239, 68, 68, 0.8);
+    border-color: rgba(239, 68, 68, 0.2);
+  }
+
+  .setting-separator {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.06);
+    margin: 16px 0;
+  }
+
+  .setting-success-msg {
+    display: none;
+    text-align: center;
+    color: rgba(34, 197, 94, 0.7);
+    font-size: 11px;
+    font-weight: 500;
+    margin-top: 8px;
+  }
+
+  /* ── API KEY ROWS ── */
+  .api-key-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .api-key-label {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.4);
+    min-width: 65px;
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+  .api-key-row .setting-input { flex: 1; width: auto; }
 
   /* ── WELCOME SCREEN ── */
   #welcome-screen {

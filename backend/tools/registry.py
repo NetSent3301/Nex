@@ -23,6 +23,7 @@ from tools.mcp import MCPTool
 from tools.skills import SkillsTool
 from tools.lsp import LSPTool
 from tools.sessions import SessionTool
+from tools.image_tool import ReadImageTool, ImageInfoTool
 from tools.errors import ToolError
 
 
@@ -94,5 +95,7 @@ def create_default_registry() -> Registry:
         SkillsTool(),
         LSPTool(),
         SessionTool(),
+        ReadImageTool(),
+        ImageInfoTool(),
     )
     return registry

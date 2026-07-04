@@ -1,4 +1,4 @@
-import type { Message, ChatSession, SessionGroup, SystemMetrics } from "./types";
+import type { Message, ChatSession, SessionGroup, SystemMetrics, ProviderInfo } from "./types";
 
 interface NetosAPI {
   sendMessage: (message: string) => Promise<{ success: boolean; response: string }>;
@@ -64,8 +64,9 @@ const newSessionBtn = $<HTMLButtonElement>("new-session-btn");
 const attachBtn = $<HTMLButtonElement>("attach-btn");
 const fileInput = $<HTMLInputElement>("file-input");
 const settingsTrigger = $<HTMLButtonElement>("settings-trigger");
-const settingsDropdown = $<HTMLElement>("settings-dropdown");
-const radiusSlider = $<HTMLInputElement>("radius-slider");
+const settingsOverlay = $<HTMLElement>("settings-overlay");
+const settingsCloseBtn = $<HTMLButtonElement>("settings-close-btn");
+const radiusSlider = $<HTMLInputElement>("setting-radius");
 const radiusValue = $<HTMLElement>("radius-value");
 const workspacePathEl = $<HTMLElement>("workspace-path");
 const memoryBar = $<HTMLElement>("memory-bar");
@@ -118,32 +119,390 @@ function escapeHtml(text: string): string {
 }
 
 // ── SETTINGS ──
+let currentProviders: ProviderInfo[] = [];
+
 function initSettings(): void {
-  const saved = localStorage.getItem("nex_interface_radius");
-  if (saved) {
-    const v = parseInt(saved);
-    radiusSlider.value = String(v);
-    document.documentElement.style.setProperty("--interface-radius", v + "px");
-    radiusValue.textContent = v + "px";
-  }
-
-  settingsTrigger.addEventListener("click", (e) => {
-    e.stopPropagation();
-    settingsDropdown.classList.toggle("open");
+  // ── Modal open/close ──
+  settingsTrigger.addEventListener("click", () => {
+    settingsOverlay.classList.add("open");
+    loadAllSettings();
   });
-
-  document.addEventListener("click", (e) => {
-    if (!settingsDropdown.contains(e.target as Node) && e.target !== settingsTrigger) {
-      settingsDropdown.classList.remove("open");
+  settingsCloseBtn.addEventListener("click", () => {
+    settingsOverlay.classList.remove("open");
+  });
+  settingsOverlay.addEventListener("click", (e) => {
+    if (e.target === settingsOverlay) settingsOverlay.classList.remove("open");
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && settingsOverlay.classList.contains("open")) {
+      settingsOverlay.classList.remove("open");
     }
   });
 
+  // ── Nav sidebar ──
+  document.querySelectorAll(".settings-nav-item").forEach((item) => {
+    item.addEventListener("click", () => {
+      document.querySelectorAll(".settings-nav-item").forEach((n) => n.classList.remove("active"));
+      document.querySelectorAll(".settings-panel").forEach((p) => p.classList.remove("active"));
+      item.classList.add("active");
+      const panel = document.getElementById("panel-" + (item as HTMLElement).dataset.section);
+      if (panel) panel.classList.add("active");
+    });
+  });
+
+  // ── General ──
   radiusSlider.addEventListener("input", () => {
     const v = parseInt(radiusSlider.value);
     document.documentElement.style.setProperty("--interface-radius", v + "px");
     radiusValue.textContent = v + "px";
     localStorage.setItem("nex_interface_radius", String(v));
+    saveSetting("interface_radius", v);
   });
+
+  const fontSizeSlider = document.getElementById("setting-font-size") as HTMLInputElement;
+  const fontSizeVal = document.getElementById("font-size-value") as HTMLElement;
+  fontSizeSlider?.addEventListener("input", () => {
+    const v = parseInt(fontSizeSlider.value);
+    fontSizeVal.textContent = v + "px";
+    document.documentElement.style.setProperty("--base-font-size", v + "px");
+    saveSetting("font_size", v);
+  });
+
+  document.getElementById("setting-theme")?.addEventListener("change", (e) => {
+    saveSetting("theme", (e.target as HTMLSelectElement).value);
+  });
+  document.getElementById("setting-language")?.addEventListener("change", (e) => {
+    saveSetting("language", (e.target as HTMLSelectElement).value);
+  });
+  document.getElementById("setting-animations")?.addEventListener("change", (e) => {
+    const on = (e.target as HTMLInputElement).checked;
+    saveSetting("animations_enabled", on);
+    document.documentElement.style.setProperty("--animations", on ? "1" : "0");
+  });
+
+  // ── Chat ──
+  const tempSlider = document.getElementById("setting-temperature") as HTMLInputElement;
+  const tempVal = document.getElementById("temperature-value") as HTMLElement;
+  tempSlider?.addEventListener("input", () => {
+    const v = parseFloat(tempSlider.value);
+    tempVal.textContent = v.toFixed(2);
+    saveSetting("temperature", v);
+  });
+
+  const topPSlider = document.getElementById("setting-top-p") as HTMLInputElement;
+  const topPVal = document.getElementById("top-p-value") as HTMLElement;
+  topPSlider?.addEventListener("input", () => {
+    const v = parseFloat(topPSlider.value);
+    topPVal.textContent = v.toFixed(2);
+    saveSetting("top_p", v);
+  });
+
+  document.getElementById("setting-max-tokens")?.addEventListener("change", (e) => {
+    saveSetting("max_tokens", parseInt((e.target as HTMLInputElement).value));
+  });
+  document.getElementById("setting-send-mode")?.addEventListener("change", (e) => {
+    saveSetting("send_mode", (e.target as HTMLSelectElement).value);
+  });
+  document.getElementById("setting-auto-scroll")?.addEventListener("change", (e) => {
+    saveSetting("auto_scroll", (e.target as HTMLInputElement).checked);
+  });
+  document.getElementById("setting-timestamps")?.addEventListener("change", (e) => {
+    saveSetting("show_timestamps", (e.target as HTMLInputElement).checked);
+  });
+  document.getElementById("setting-syntax-highlighting")?.addEventListener("change", (e) => {
+    saveSetting("syntax_highlighting", (e.target as HTMLInputElement).checked);
+  });
+
+  // ── Provider ──
+  const provSelect = document.getElementById("setting-provider") as HTMLSelectElement;
+  provSelect?.addEventListener("change", () => {
+    saveSetting("provider", provSelect.value);
+    loadModelsForProvider(provSelect.value);
+  });
+
+  const modelSelect = document.getElementById("setting-model") as HTMLSelectElement;
+  modelSelect?.addEventListener("change", () => {
+    saveSetting("model", modelSelect.value);
+  });
+
+  document.getElementById("refresh-models-btn")?.addEventListener("click", () => {
+    const prov = (document.getElementById("setting-provider") as HTMLSelectElement).value;
+    loadModelsForProvider(prov);
+  });
+
+  // ── Provider URLs ──
+  document.getElementById("setting-url-openai")?.addEventListener("change", (e) => {
+    saveSetting("custom_api_urls", { openai: (e.target as HTMLInputElement).value });
+  });
+  document.getElementById("setting-url-ollama")?.addEventListener("change", (e) => {
+    saveSetting("custom_api_urls", { ollama: (e.target as HTMLInputElement).value });
+  });
+  document.getElementById("setting-timeout")?.addEventListener("change", (e) => {
+    saveSetting("auto_save_interval", parseInt((e.target as HTMLInputElement).value));
+  });
+
+  // ── API Keys ──
+  document.getElementById("save-keys-btn")?.addEventListener("click", saveApiKeys);
+
+  // ── System ──
+  document.getElementById("setting-system-prompt")?.addEventListener("change", (e) => {
+    saveSetting("system_prompt", (e.target as HTMLTextAreaElement).value);
+  });
+  document.getElementById("setting-max-tool-calls")?.addEventListener("change", (e) => {
+    saveSetting("max_tool_calls", parseInt((e.target as HTMLInputElement).value));
+  });
+  document.getElementById("setting-auto-save")?.addEventListener("change", (e) => {
+    saveSetting("auto_save_interval", parseInt((e.target as HTMLInputElement).value));
+  });
+
+  // ── Data ──
+  document.getElementById("export-settings-btn")?.addEventListener("click", async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/settings/export`);
+      const data = await res.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = "nex-settings.json"; a.click();
+      URL.revokeObjectURL(url);
+    } catch {}
+  });
+
+  document.getElementById("import-settings-btn")?.addEventListener("click", () => {
+    document.getElementById("import-file-input")?.click();
+  });
+  document.getElementById("import-file-input")?.addEventListener("change", async (e) => {
+    const input = e.target as HTMLInputElement;
+    if (!input.files?.length) return;
+    try {
+      const text = await input.files[0].text();
+      const data = JSON.parse(text);
+      await fetch(`${API_BASE}/api/v1/settings/import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      loadAllSettings();
+    } catch {}
+    input.value = "";
+  });
+
+  document.getElementById("clear-history-btn")?.addEventListener("click", async () => {
+    if (!confirm("¿Limpiar todo el historial de chat? Esta acción no se puede deshacer.")) return;
+    try {
+      await fetch(`${API_BASE}/api/v1/clear-history`, { method: "POST" });
+    } catch {}
+  });
+
+  document.getElementById("reset-settings-btn")?.addEventListener("click", async () => {
+    if (!confirm("¿Restablecer toda la configuración a valores predeterminados?")) return;
+    try {
+      await fetch(`${API_BASE}/api/v1/settings/reset`, { method: "POST" });
+      loadAllSettings();
+      // Reset local overrides
+      localStorage.removeItem("nex_interface_radius");
+      document.documentElement.style.setProperty("--interface-radius", "12px");
+      radiusSlider.value = "12";
+      radiusValue.textContent = "12px";
+      const fontSizeSlider2 = document.getElementById("setting-font-size") as HTMLInputElement;
+      if (fontSizeSlider2) {
+        fontSizeSlider2.value = "14";
+        document.getElementById("font-size-value")!.textContent = "14px";
+      }
+    } catch {}
+  });
+}
+
+async function loadAllSettings(): Promise<void> {
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/settings`);
+    if (!res.ok) return;
+    const data = await res.json();
+    applySettingsToUI(data);
+  } catch {}
+}
+
+function applySettingsToUI(data: any): void {
+  // General
+  setSelect("setting-theme", data.theme);
+  setSelect("setting-language", data.language);
+
+  if (data.font_size) {
+    const fs = document.getElementById("setting-font-size") as HTMLInputElement;
+    const fsv = document.getElementById("font-size-value") as HTMLElement;
+    if (fs) { fs.value = String(data.font_size); fsv.textContent = data.font_size + "px"; }
+    document.documentElement.style.setProperty("--base-font-size", data.font_size + "px");
+  }
+
+  if (data.interface_radius != null) {
+    radiusSlider.value = String(data.interface_radius);
+    radiusValue.textContent = data.interface_radius + "px";
+    document.documentElement.style.setProperty("--interface-radius", data.interface_radius + "px");
+    localStorage.setItem("nex_interface_radius", String(data.interface_radius));
+  }
+
+  const animCheck = document.getElementById("setting-animations") as HTMLInputElement;
+  if (animCheck) animCheck.checked = data.animations_enabled !== false;
+
+  // Chat
+  if (data.temperature != null) {
+    const ts = document.getElementById("setting-temperature") as HTMLInputElement;
+    const tv = document.getElementById("temperature-value") as HTMLElement;
+    if (ts) { ts.value = String(data.temperature); tv.textContent = parseFloat(String(data.temperature)).toFixed(2); }
+  }
+  if (data.top_p != null) {
+    const tp = document.getElementById("setting-top-p") as HTMLInputElement;
+    const tpv = document.getElementById("top-p-value") as HTMLElement;
+    if (tp) { tp.value = String(data.top_p); tpv.textContent = parseFloat(String(data.top_p)).toFixed(2); }
+  }
+  setInput("setting-max-tokens", data.max_tokens);
+  setSelect("setting-send-mode", data.send_mode);
+  setCheck("setting-auto-scroll", data.auto_scroll);
+  setCheck("setting-timestamps", data.show_timestamps);
+  setCheck("setting-syntax-highlighting", data.syntax_highlighting);
+
+  // Provider
+  currentProviders = data.providers || [];
+  const provSelect = document.getElementById("setting-provider") as HTMLSelectElement;
+  if (provSelect) {
+    provSelect.innerHTML = currentProviders
+      .map((p: any) => `<option value="${p.name}" ${p.name === data.provider ? "selected" : ""}>${p.name}${p.models?.length ? ` (${p.models.length} modelos)` : ""}</option>`)
+      .join("");
+
+    const activeProv = currentProviders.find((p: any) => p.name === data.provider);
+    const models = activeProv?.models || [];
+    const modelSelect = document.getElementById("setting-model") as HTMLSelectElement;
+    if (modelSelect) {
+      if (models.length > 0) {
+        modelSelect.innerHTML = models
+          .map((m: string) => `<option value="${m}" ${m === data.model ? "selected" : ""}>${m}</option>`)
+          .join("");
+      } else {
+        modelSelect.innerHTML = `<option value="${data.model}" selected>${data.model}</option>`;
+      }
+    }
+  }
+
+  // Also try Ollama models
+  loadOllamaModels();
+
+  // URLs
+  const urls = data.custom_api_urls || {};
+  setInput("setting-url-openai", urls.openai || "");
+  setInput("setting-url-ollama", urls.ollama || "");
+  setInput("setting-timeout", data.auto_save_interval);
+
+  // System
+  const sp = document.getElementById("setting-system-prompt") as HTMLTextAreaElement;
+  if (sp && data.system_prompt) sp.value = data.system_prompt;
+  setInput("setting-max-tool-calls", data.max_tool_calls);
+  setInput("setting-auto-save", data.auto_save_interval);
+}
+
+async function loadOllamaModels(): Promise<void> {
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/ollama/models`);
+    if (!res.ok) return;
+    const ollamaData = await res.json();
+    const provSelect = document.getElementById("setting-provider") as HTMLSelectElement;
+    if (!provSelect) return;
+
+    if (ollamaData.models?.length > 0) {
+      const existing = Array.from(provSelect.options).find((o) => o.value === "ollama");
+      if (!existing) {
+        const opt = document.createElement("option");
+        opt.value = "ollama";
+        opt.textContent = `ollama (${ollamaData.models.length} modelos locales)`;
+        provSelect.appendChild(opt);
+      }
+    }
+
+    // If current provider is ollama, update models
+    if (provSelect.value === "ollama" && ollamaData.models?.length) {
+      const modelSelect = document.getElementById("setting-model") as HTMLSelectElement;
+      if (modelSelect) {
+        modelSelect.innerHTML = ollamaData.models
+          .map((m: string) => `<option value="${m}">${m}</option>`)
+          .join("");
+      }
+    }
+  } catch {}
+}
+
+async function loadModelsForProvider(providerName: string): Promise<void> {
+  const modelSelect = document.getElementById("setting-model") as HTMLSelectElement;
+  if (!modelSelect) return;
+
+  if (providerName === "ollama") {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/ollama/models`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.models?.length > 0) {
+          modelSelect.innerHTML = data.models.map((m: string) => `<option value="${m}">${m}</option>`).join("");
+          return;
+        }
+      }
+    } catch {}
+    modelSelect.innerHTML = '<option value="">No hay modelos Ollama</option>';
+    return;
+  }
+
+  const provider = currentProviders.find((p) => p.name === providerName);
+  const models = provider?.models || [];
+  if (models.length > 0) {
+    modelSelect.innerHTML = models.map((m: string) => `<option value="${m}">${m}</option>`).join("");
+  } else {
+    modelSelect.innerHTML = '<option value="">Seleccionar modelo</option>';
+  }
+}
+
+function setSelect(id: string, value: any): void {
+  const el = document.getElementById(id) as HTMLSelectElement;
+  if (el && value != null) el.value = String(value);
+}
+function setInput(id: string, value: any): void {
+  const el = document.getElementById(id) as HTMLInputElement;
+  if (el && value != null) el.value = String(value);
+}
+function setCheck(id: string, value: any): void {
+  const el = document.getElementById(id) as HTMLInputElement;
+  if (el) el.checked = value !== false;
+}
+
+async function saveSetting(key: string, value: any): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/api/v1/settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [key]: value }),
+    });
+  } catch {}
+}
+
+async function saveApiKeys(): Promise<void> {
+  const keys: Record<string, string> = {};
+  for (const p of ["gemini", "openai", "anthropic", "deepseek"]) {
+    const input = document.getElementById(`key-${p}`) as HTMLInputElement;
+    if (input && input.value.trim()) keys[p] = input.value.trim();
+  }
+  if (Object.keys(keys).length === 0) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_keys: keys }),
+    });
+    if (res.ok) {
+      const msg = document.getElementById("keys-saved-msg");
+      if (msg) { msg.style.display = "block"; setTimeout(() => { msg.style.display = "none"; }, 3000); }
+      for (const p of ["gemini", "openai", "anthropic", "deepseek"]) {
+        const input = document.getElementById(`key-${p}`) as HTMLInputElement;
+        if (input) input.value = "";
+      }
+    }
+  } catch {}
 }
 
 // ── WELCOME ──
@@ -399,8 +758,8 @@ function updateToolCard(id: string, result: Record<string, unknown>): void {
   const card = document.getElementById(id);
   if (!card) return;
   const header = card.querySelector(".tool-call-header")!;
-  const spinner = header.querySelector(".tool-call-spinner")!;
-  const status = header.querySelector(".tool-call-status")!;
+  const spinner = header.querySelector(".tool-call-spinner") as HTMLElement;
+  const status = header.querySelector(".tool-call-status") as HTMLElement;
 
   const hasError = result && result.error;
   spinner.className = hasError ? "tool-call-spinner" : "";
@@ -458,11 +817,31 @@ async function sendMessage(): Promise<void> {
   let assistantText = "";
   showLoading();
 
+  const body: Record<string, unknown> = { message: text, session_id: session.id };
+
+  // Add current provider/model from settings
+  const providerSelect = document.getElementById("setting-provider") as HTMLSelectElement;
+  const modelSelect = document.getElementById("setting-model") as HTMLSelectElement;
+  if (providerSelect && providerSelect.value) {
+    body.provider = providerSelect.value;
+  }
+  if (modelSelect && modelSelect.value) {
+    body.model = modelSelect.value;
+  }
+
+  // Add image if attached
+  const pendingImage = (window as any).__pendingImage;
+  if (pendingImage) {
+    body.image_data = pendingImage.data;
+    body.image_mime = pendingImage.mime;
+    delete (window as any).__pendingImage;
+  }
+
   try {
     const response = await fetch(`${API_BASE}/api/chat/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text, session_id: session.id }),
+      body: JSON.stringify(body),
       signal: streamAbortController.signal,
     });
 
@@ -600,14 +979,53 @@ async function initWorkspace(): Promise<void> {
 }
 
 // ── FILE ATTACH ──
+async function uploadImage(file: File): Promise<void> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/upload/image`, {
+      method: "POST",
+      body: formData,
+    });
+    if (res.ok) {
+      const data = await res.json();
+      (window as any).__pendingImage = {
+        data: data.image_data,
+        mime: data.mime_type,
+        filename: data.filename,
+      };
+      messageInput.value = messageInput.value
+        ? messageInput.value + `\n[📷 ${data.filename}]`
+        : `[📷 ${data.filename}]`;
+      messageInput.dispatchEvent(new Event("input"));
+    } else {
+      appendMessage("assistant", `⚠️ Error al subir imagen: ${res.statusText}`);
+    }
+  } catch (err) {
+    appendMessage("assistant", `⚠️ Error al subir imagen: ${err}`);
+  }
+}
+
 function initFileAttach(): void {
   attachBtn.addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", () => {
     if (fileInput.files && fileInput.files.length > 0) {
-      const names = Array.from(fileInput.files).map((f) => f.name).join(", ");
-      messageInput.value = messageInput.value
-        ? messageInput.value + `\n[Archivos adjuntos: ${names}]`
-        : `[Archivos adjuntos: ${names}]`;
+      const files = Array.from(fileInput.files);
+      const images = files.filter((f) => f.type.startsWith("image/"));
+      const others = files.filter((f) => !f.type.startsWith("image/"));
+
+      if (images.length > 0) {
+        uploadImage(images[0]);
+      }
+
+      if (others.length > 0) {
+        const names = others.map((f) => f.name).join(", ");
+        messageInput.value = messageInput.value
+          ? messageInput.value + `\n[Archivos: ${names}]`
+          : `[Archivos: ${names}]`;
+      }
+
       fileInput.value = "";
       messageInput.dispatchEvent(new Event("input"));
       messageInput.focus();

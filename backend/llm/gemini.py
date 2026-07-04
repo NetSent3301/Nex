@@ -107,3 +107,44 @@ class GeminiProvider(LLMProvider):
 
         response = self._call_with_retry(call)
         return response.text
+
+    def generate_with_image(self, prompt: str, image_base64: str, mime_type: str = "image/png") -> str:
+        import base64
+        img_bytes = base64.b64decode(image_base64)
+        config = types.GenerateContentConfig(system_instruction=system_prompt)
+
+        def call():
+            return self.client.models.generate_content(
+                model=self.model,
+                contents=[
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part.from_text(text=prompt),
+                            types.Part.from_bytes(data=img_bytes, mime_type=mime_type),
+                        ],
+                    )
+                ],
+                config=config,
+            )
+
+        response = self._call_with_retry(call)
+        return response.text
+
+    def list_models(self) -> list[str]:
+        return [
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-8b",
+            "gemini-2.5-pro",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
+            "gemma-3-27b-it",
+        ]
+
+    def supports_images(self) -> bool:
+        return True
+
+    def supports_tools(self) -> bool:
+        return True

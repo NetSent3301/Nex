@@ -20,3 +20,9 @@ export interface SystemMetrics {
 }
 
 export type SessionGroup = "Hoy" | "Ayer" | "Últimos 7 días" | "Anterior";
+
+export interface ProviderInfo {
+  name: string;
+  models: string[];
+  configured: boolean;
+}
