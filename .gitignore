@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.env
+
+# Node
+node_modules/
+dist/
+out/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Nex
+backend/config.toml
+backend/.env
+backend/.nex_keys.json
+backend/.nex_settings.json
+backend/storage/.nex_history*.json
+backend/tools/__pycache__/

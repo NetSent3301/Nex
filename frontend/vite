@@ -1,0 +1,8 @@
+# 1. Instalar todos los paquetes definidos en el package.json
+npm install
+
+# 2. Ahora sí, lanza el entorno de desarrollo
+npm run dev
+
+
+

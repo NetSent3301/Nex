@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -e
+
+NEX_DIR="$(cd "$(dirname "$0")" && pwd)"
+VENV_PYTHON="$NEX_DIR/.venv/bin/python"
+VENV_UVICORN="$NEX_DIR/.venv/bin/uvicorn"
+FRONTEND="$NEX_DIR/frontend"
+ELECTRON="$FRONTEND/node_modules/.bin/electron"
+BACKEND_PORT="${NEX_PORT:-8765}"
+
+cleanup() {
+  echo ""
+  echo "Deteniendo Nex..."
+  if [ -n "$BACKEND_PID" ] && kill -0 "$BACKEND_PID" 2>/dev/null; then
+    kill "$BACKEND_PID" 2>/dev/null
+    wait "$BACKEND_PID" 2>/dev/null
+  fi
+  exit 0
+}
+trap cleanup SIGINT SIGTERM
+
+# ── Workspace: directorio desde donde se ejecuta el comando ──
+WORKSPACE="$PWD"
+export NEX_WORKSPACE="$WORKSPACE"
+echo "Workspace: $WORKSPACE"
+
+# ── Construir frontend si es necesario ──
+if [ ! -f "$FRONTEND/dist/main.js" ] || [ ! -f "$FRONTEND/dist/index.html" ]; then
+  echo "Compilando frontend..."
+  npm run build --prefix "$FRONTEND" > /dev/null 2>&1
+fi
+
+# ── Matar backend previo si existe ──
+if lsof -ti :"$BACKEND_PORT" > /dev/null 2>&1; then
+  echo "Cerrando servidor anterior..."
+  kill $(lsof -ti :"$BACKEND_PORT") 2>/dev/null
+  sleep 0.5
+fi
+
+# ── Iniciar backend ──
+echo "Iniciando servidor..."
+cd "$NEX_DIR/backend"
+$VENV_UVICORN api.routes:app --host 127.0.0.1 --port "$BACKEND_PORT" &
+BACKEND_PID=$!
+cd "$NEX_DIR"
+
+# ── Esperar a que el backend responda ──
+for i in $(seq 1 30); do
+  if curl -s "http://127.0.0.1:$BACKEND_PORT/api/v1/health" > /dev/null 2>&1; then
+    break
+  fi
+  sleep 0.3
+done
+
+# ── Iniciar Electron ──
+echo "Iniciando interfaz..."
+$ELECTRON "$FRONTEND" --no-sandbox 2>/dev/null &
+ELECTRON_PID=$!
+
+# Esperar a que Electron termine o recibir señal
+wait $ELECTRON_PID 2>/dev/null
+cleanup

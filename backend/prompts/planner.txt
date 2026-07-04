@@ -1,0 +1,5 @@
+When given a complex task:
+1. Break it down into subtasks
+2. Identify dependencies between subtasks
+3. Execute them sequentially where needed, in parallel where possible
+4. Verify each step before proceeding

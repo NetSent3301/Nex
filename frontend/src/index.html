@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' http://127.0.0.1:8765 ws://127.0.0.1:8765" />
+  <title>Nex — AI Coding Assistant</title>
+  <link rel="stylesheet" href="styles/main.css" />
+  <style>
+    :root { --interface-radius: 12px; }
+  </style>
+</head>
+<body>
+  <!-- ⚙️ SETTINGS (gear icon + dropdown) -->
+  <button class="settings-btn fixed top-4 right-4 z-50" id="settings-trigger" aria-label="Configuración">
+    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </svg>
+  </button>
+
+  <div class="settings-dropdown" id="settings-dropdown">
+    <label>Curvatura de interfaz</label>
+    <div class="slider-row">
+      <input type="range" id="radius-slider" min="0" max="24" value="12" />
+      <span class="slider-value" id="radius-value">12px</span>
+    </div>
+  </div>
+
+  <!-- ═══ APP CONTAINER ═══ -->
+  <div id="app">
+
+    <!-- ═══ SIDEBAR ═══ -->
+    <aside id="sidebar">
+      <div id="sidebar-header">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="text-lg font-bold tracking-tight bg-gradient-to-r from-indigo-300 to-indigo-400 bg-clip-text text-transparent">Nex</span>
+          <span class="text-[9px] font-bold tracking-wider px-1.5 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400/80 border border-indigo-500/20 uppercase">Dev</span>
+        </div>
+        <button id="new-session-btn" class="w-full flex items-center gap-2 px-3 py-2.5 rounded-[10px] border border-white/[0.06] bg-white/[0.03] hover:bg-white/[0.07] text-white/50 hover:text-white/85 transition-all duration-200 text-sm font-medium group">
+          <svg class="w-4 h-4 text-indigo-400/60 group-hover:text-indigo-400 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+          Nueva Sesión
+        </button>
+      </div>
+
+      <div id="session-list" class="flex-1 overflow-y-auto px-2.5 py-2 space-y-0.5"></div>
+
+      <div id="metrics-panel">
+        <div class="metrics-label">System &amp; Agent Metrics</div>
+
+        <div class="metric-row">
+          <div class="metric-header">
+            <span>Memoria</span>
+            <span class="metric-value" id="memory-value">--</span>
+          </div>
+          <div class="metric-bar">
+            <div class="metric-bar-fill" id="memory-bar" style="width:0%;background:linear-gradient(90deg,#6366f1,#818cf8)"></div>
+          </div>
+        </div>
+
+        <div class="metric-row">
+          <div class="metric-header">
+            <span>Buffer de Contexto</span>
+            <span class="metric-value" id="context-value">--</span>
+          </div>
+          <div class="metric-bar">
+            <div class="metric-bar-fill" id="context-bar" style="width:0%;background:linear-gradient(90deg,#06b6d4,#22d3ee)"></div>
+          </div>
+        </div>
+
+        <div class="agent-status">
+          <div class="agent-ring-container">
+            <svg class="w-7 h-7 -rotate-90" viewBox="0 0 28 28">
+              <circle cx="14" cy="14" r="11.5" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="2"/>
+              <circle id="agent-ring" cx="14" cy="14" r="11.5" fill="none" stroke="#22c55e" stroke-width="2" stroke-linecap="round" stroke-dasharray="72.2" stroke-dashoffset="0" style="transition:stroke-dashoffset 1s ease"/>
+            </svg>
+            <span class="agent-dot" id="agent-dot"></span>
+          </div>
+          <div>
+            <div class="agent-label">Agent Core</div>
+            <div class="agent-state text-green-400/70" id="agent-status">Online</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ═══ MAIN PANEL ═══ -->
+    <main id="main-panel">
+
+      <!-- Welcome Screen -->
+      <div id="welcome-screen">
+        <div class="plasma-container">
+          <canvas id="plasma-canvas"></canvas>
+        </div>
+        <div class="text-center max-w-xl">
+          <h1 id="welcome-message" class="text-[26px] md:text-[32px] font-light text-white/40 leading-snug tracking-tight">
+          </h1>
+          <p class="text-sm text-white/15 mt-6 font-mono tracking-wide">~ $ nex --ready</p>
+        </div>
+      </div>
+
+      <!-- Chat Messages -->
+      <div id="chat-container" class="flex-1 overflow-y-auto px-5 py-5" style="display:none"></div>
+
+      <!-- Input Bar -->
+      <div id="input-bar">
+        <div class="mb-2.5 flex items-center gap-2">
+          <span class="workspace-badge">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            <span>Workspace:</span>
+            <span class="ws-path" id="workspace-path">nex/backend/agent</span>
+          </span>
+        </div>
+
+        <div id="input-wrapper">
+          <button class="input-btn" id="attach-btn" title="Adjuntar archivo">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+          </button>
+          <input type="file" id="file-input" class="hidden" multiple />
+
+          <textarea
+            id="message-input"
+            rows="1"
+            placeholder="Escribe una orden o comando para Nex..."
+          ></textarea>
+
+          <button id="stop-btn" title="Detener ejecución">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+          </button>
+
+          <button id="send-btn" aria-label="Enviar mensaje">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+          </button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script type="module" src="renderer.ts"></script>
+</body>
+</html>

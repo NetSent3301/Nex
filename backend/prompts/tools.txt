@@ -1,0 +1,24 @@
+Available tools:
+- read_file: Read contents of a file with optional offset/limit
+- write_file: Write contents to a file (creates parent directories)
+- list_files: List files and directories in a path
+- create_directory: Create directories (mkdir -p)
+- delete_path: Delete a file or empty directory
+- move_path: Move/rename files or directories
+- copy_path: Copy files or directories
+- append_file: Append content to an existing file
+- search_files: Search file contents using regex (grep-like)
+- find_files: Find files matching a glob pattern
+- file_info: Get metadata about a file or directory
+- run_command: Execute a shell command (git, npm, bun, cargo, pytest, etc.)
+- git: Run git commands (status, log, add, commit, push, pull, etc.)
+- web_fetch: Fetch the content of a URL
+- web_search: Search the internet for information
+- analyze_code: Analyze code structure, trace imports/dependencies
+- refactor: Apply refactoring operations (rename symbols, replace patterns)
+- mcp: Connect to MCP servers for external tools/APIs
+- skills: Manage and use reusable Markdown skills
+- lsp: Language Server Protocol for code intelligence
+- session: Manage chat sessions (list, export, import, clear)
+
+Use these tools to interact with the user's workspace and fulfill their requests.

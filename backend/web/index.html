@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Nex Web</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  background:#111b21;color:#e9edef;height:100dvh;overflow:hidden;font-size:15px;
+  -webkit-font-smoothing:antialiased
+}
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#374045;border-radius:2px}
+#app{display:flex;height:100dvh}
+/* sidebar */
+#sidebar{
+  width:220px;background:#111b21;border-right:1px solid #222e35;
+  display:flex;flex-direction:column;flex-shrink:0
+}
+#sidebar-header{padding:20px 12px 12px;border-bottom:1px solid #222e35}
+#sidebar-header h1{font-size:17px;font-weight:600;color:#e9edef}
+#new-btn{
+  width:100%;margin-top:12px;padding:8px 12px;background:#2a3942;
+  border:none;border-radius:8px;color:#e9edef;font:inherit;font-size:13px;cursor:pointer
+}
+#new-btn:hover{background:#364a54}
+#session-list{flex:1;overflow-y:auto;padding:6px}
+.s-item{
+  padding:9px 10px;cursor:pointer;font-size:13px;color:#aebac1;
+  border-radius:8px;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+}
+.s-item:hover{background:#202c33;color:#e9edef}
+.s-item.active{background:#2a3942;color:#e9edef}
+/* main */
+#main{flex:1;display:flex;flex-direction:column;min-width:0;background:#0b141a}
+#chat-header{
+  padding:12px 16px;border-bottom:1px solid #222e35;font-size:13px;font-weight:500;
+  color:#8696a0;flex-shrink:0;background:#111b21
+}
+#messages{
+  flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:5px
+}
+.msg{display:flex;flex-direction:column;max-width:85%;animation:fadeIn .15s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+.msg.user{align-self:flex-end;align-items:flex-end}
+.msg.assistant{align-self:flex-start;align-items:flex-start}
+.bubble{
+  padding:7px 12px;border-radius:10px;font-size:14px;line-height:1.45;
+  white-space:pre-wrap;word-break:break-word
+}
+.msg.user .bubble{background:#005c4b;color:#e9edef;border-bottom-right-radius:3px}
+.msg.assistant .bubble{background:#202c33;color:#e9edef;border-bottom-left-radius:3px}
+.bubble.loading{opacity:.5}
+/* input */
+#input-bar{
+  padding:10px 12px;border-top:1px solid #222e35;flex-shrink:0;background:#111b21
+}
+#input-row{
+  display:flex;gap:8px;background:#202c33;border-radius:8px;padding:4px 8px;align-items:flex-end
+}
+#input{
+  flex:1;background:transparent;border:none;outline:none;color:#e9edef;
+  font:inherit;font-size:15px;padding:8px 6px;resize:none
+}
+#input::placeholder{color:#8696a0}
+#send{
+  width:36px;height:36px;border:none;background:#005c4b;border-radius:50%;
+  color:#e9edef;font-size:18px;cursor:pointer;flex-shrink:0;display:flex;
+  align-items:center;justify-content:center
+}
+#send:hover{background:#008069}
+#send:disabled{opacity:.4;cursor:not-allowed}
+#send svg{width:18px;height:18px;fill:currentColor}
+#empty{
+  display:flex;align-items:center;justify-content:center;height:100%;color:#475c6b;font-size:14px
+}
+@media(max-width:640px){
+  #sidebar{width:55px;overflow:hidden}
+  #sidebar-header h1,#new-btn span,.s-item{display:none}
+  #sidebar-header{padding:16px 0;text-align:center}
+  #sidebar-header h1{display:block;font-size:14px}
+  #new-btn{margin:8px auto;width:32px;height:32px;border-radius:50%;padding:0;display:flex;align-items:center;justify-content:center}
+  #new-btn span{display:none}
+  .s-item.active{display:block;width:32px;height:32px;border-radius:50%;margin:4px auto;padding:0;text-align:center;line-height:32px}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <div id="sidebar-header"><h1>Nex</h1><button id="new-btn">+ <span>Nuevo chat</span></button></div>
+    <div id="session-list"></div>
+  </div>
+  <div id="main">
+    <div id="chat-header">Nex</div>
+    <div id="messages"><div id="empty">Escribe un mensaje para empezar.</div></div>
+    <div id="input-bar">
+      <div id="input-row">
+        <textarea id="input" rows="1" placeholder="Mensaje"></textarea>
+        <button id="send" disabled><svg viewBox="0 0 24 24"><path d="M1.101 21.757L23.8 12.028 1.101 2.3l.011 7.912 13.623 1.816-13.623 1.817-.011 7.912z"/></svg></button>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+const API = '/api/chat';
+const MAX_MSGS = 50;
+
+let sessions = loadSessions();
+let activeId = sessions[0]?.id || null;
+if (!activeId) { sessions = [newSession()]; activeId = sessions[0].id; persistSessions(); }
+
+const $ = s => document.querySelector(s);
+const listEl = $('#session-list'), msgEl = $('#messages'), inputEl = $('#input'), sendBtn = $('#send'), headerEl = $('#chat-header'), emptyEl = () => document.getElementById('empty');
+
+function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6) }
+function escape(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML }
+
+function newSession(){
+  const n = sessions.filter(s=>s.title.startsWith('Chat')).length + 1;
+  return { id: uid(), title: 'Chat ' + n, messages: [], created: Date.now() };
+}
+
+function getActive(){ return sessions.find(s=>s.id===activeId) || sessions[0] }
+
+function renderSidebar(){
+  listEl.innerHTML = sessions.map(s =>
+    `<div class="s-item${s.id===activeId?' active':''}" data-id="${s.id}">${escape(s.title)}</div>`
+  ).join('');
+}
+
+function renderMessages(){
+  const s = getActive(); if(!s) return;
+  headerEl.textContent = s.title;
+  if(!s.messages.length){ msgEl.innerHTML='<div id="empty">Escribe un mensaje para empezar.</div>'; return }
+  msgEl.innerHTML = s.messages.map(m =>
+    `<div class="msg ${m.role}"><div class="bubble">${escape(m.text)}</div></div>`
+  ).join('');
+  scrollToBottom();
+}
+
+function scrollToBottom(){ msgEl.scrollTop = msgEl.scrollHeight }
+
+function append(role, text){
+  const s = getActive(); if(!s) return;
+  s.messages.push({role,text});
+  if(s.messages.length > MAX_MSGS) s.messages = s.messages.slice(-MAX_MSGS);
+  renderMessages();
+  persistSessions();
+}
+
+function showLoading(){
+  msgEl.insertAdjacentHTML('beforeend','<div class="msg assistant" id="li"><div class="bubble loading">Pensando...</div></div>');
+  scrollToBottom();
+}
+
+function hideLoading(){ document.getElementById('li')?.remove() }
+
+function persistSessions(){
+  try { localStorage.setItem('nex_sessions', JSON.stringify(sessions)) } catch(e) {}
+}
+
+function loadSessions(){
+  try { return JSON.parse(localStorage.getItem('nex_sessions')) || [] } catch(e){ return [] }
+}
+
+function switchSession(id){
+  activeId = id; renderSidebar(); renderMessages();
+}
+
+async function send(){
+  const text = inputEl.value.trim(); if(!text) return;
+  const s = getActive(); if(!s) return;
+  inputEl.value = ''; sendBtn.disabled = true;
+  inputEl.style.height = 'auto';
+  append('user', text);
+  showLoading();
+  try {
+    const r = await fetch(API, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ message: text, session_id: s.id })
+    });
+    if(!r.ok){ const d=await r.json().catch(()=>({})); throw new Error(d.detail || r.statusText) }
+    const d = await r.json();
+    hideLoading();
+    append('assistant', d.response);
+  } catch(e){
+    hideLoading();
+    append('assistant', 'Error: ' + e.message);
+  }
+  sendBtn.disabled = false; inputEl.focus();
+}
+
+// events
+sendBtn.addEventListener('click', send);
+inputEl.addEventListener('keydown', e => { if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); send() } });
+inputEl.addEventListener('input', function(){ this.style.height='auto'; this.style.height=Math.min(this.scrollHeight,150)+'px' });
+
+listEl.addEventListener('click', e => {
+  const item = e.target.closest('.s-item');
+  if(item) switchSession(item.dataset.id);
+});
+
+document.getElementById('new-btn').addEventListener('click', ()=>{
+  const s = newSession(); sessions.push(s); activeId = s.id;
+  renderSidebar(); renderMessages(); persistSessions();
+});
+
+// init
+renderSidebar(); renderMessages();
+inputEl.focus();
+
+// auto-resize on load
+inputEl.style.height = 'auto';
+</script>
+</body>
+</html>
