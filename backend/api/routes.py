@@ -255,8 +255,16 @@ async def chat(request: ChatRequest) -> ChatResponse:
             detail="No hay un Workspace activo. Configúralo con: set-workspace <ruta>",
         )
 
+    from utils.helpers import get_current_datetime_str, get_system_info
     try:
-        system_instruction = load_system_prompt()
+        base_prompt = load_system_prompt()
+        system_instruction = (
+            f"{base_prompt}\n\n"
+            f"[INFORMACION EN TIEMPO REAL]\n"
+            f"- Fecha y hora actual: {get_current_datetime_str()}\n"
+            f"- Información del sistema: {get_system_info()}\n"
+            f"- Workspace activo: {workspace_root}\n"
+        )
     except Exception:
         from llm.gemini import system_prompt as fallback_prompt
         system_instruction = fallback_prompt
@@ -360,8 +368,16 @@ async def chat_stream(request: ChatRequest):
             detail="No hay un Workspace activo. Configúralo con: set-workspace <ruta>",
         )
 
+    from utils.helpers import get_current_datetime_str, get_system_info
     try:
-        system_instruction = load_system_prompt()
+        base_prompt = load_system_prompt()
+        system_instruction = (
+            f"{base_prompt}\n\n"
+            f"[INFORMACION EN TIEMPO REAL]\n"
+            f"- Fecha y hora actual: {get_current_datetime_str()}\n"
+            f"- Información del sistema: {get_system_info()}\n"
+            f"- Workspace activo: {workspace_root}\n"
+        )
     except Exception:
         from llm.gemini import system_prompt as fallback_prompt
         system_instruction = fallback_prompt

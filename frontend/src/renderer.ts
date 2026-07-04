@@ -640,7 +640,15 @@ function renderMessages(): void {
 
   chatContainerEl.innerHTML = session.messages
     .map((m, index) => {
-      const content = m.role === "assistant" ? renderMarkdown(m.text) : escapeHtml(m.text);
+      let content = m.role === "assistant" ? renderMarkdown(m.text) : escapeHtml(m.text);
+      if (m.image_data && m.image_mime) {
+        const imgHtml = `<img class="msg-image" src="data:${m.image_mime};base64,${m.image_data}" alt="attached image" />`;
+        if (m.text.trim()) {
+          content = content + imgHtml;
+        } else {
+          content = imgHtml;
+        }
+      }
       const avatarSvg = m.role === "assistant"
         ? `<svg class="w-[17px] h-[17px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2 2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/><path d="M6.12 9.24a2 2 0 1 1 2.83-2.83l1.41 1.41a2 2 0 1 1-2.83 2.83z"/><path d="M2 12a2 2 0 0 1 2-2h2a2 2 0 0 1 0 4H4a2 2 0 0 1-2-2z"/><path d="M9 19a2 2 0 1 1 2.83-2.83l1.41 1.41A2 2 0 1 1 9 19zm8.88-9.76a2 2 0 1 1-2.83-2.83l1.41 1.41a2 2 0 1 1 2.83 2.83z"/><path d="M16 12a2 2 0 0 1 2-2h2a2 2 0 0 1 0 4h-2a2 2 0 0 1-2-2zm-3 7a2 2 0 1 1-2.83 2.83l-1.41-1.41A2 2 0 1 1 13 19z"/></svg>`
         : `<svg class="w-[17px] h-[17px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`;
@@ -668,10 +676,13 @@ function renderMessages(): void {
   scrollToBottom();
 }
 
-function appendMessage(role: "user" | "assistant", text: string): void {
+function appendMessage(role: "user" | "assistant", text: string, imageData?: string, imageMime?: string): void {
   const session = getActiveSession();
   if (!session) return;
-  session.messages.push({ role, text, timestamp: Date.now() });
+  const msg: Message = { role, text, timestamp: Date.now() };
+  if (imageData) msg.image_data = imageData;
+  if (imageMime) msg.image_mime = imageMime;
+  session.messages.push(msg);
   session.updatedAt = Date.now();
   hideWelcome();
   renderMessages();
@@ -806,7 +817,13 @@ async function sendMessage(): Promise<void> {
 
   messageInput.value = "";
   messageInput.style.height = "auto";
-  appendMessage("user", text);
+
+  const pendingImage = (window as any).__pendingImage as { data: string; mime: string; filename: string } | undefined;
+  const imgData = pendingImage?.data;
+  const imgMime = pendingImage?.mime;
+  clearImagePreview();
+
+  appendMessage("user", text, imgData, imgMime);
 
   isSending = true;
   sendBtn.disabled = true;
@@ -830,11 +847,9 @@ async function sendMessage(): Promise<void> {
   }
 
   // Add image if attached
-  const pendingImage = (window as any).__pendingImage;
-  if (pendingImage) {
-    body.image_data = pendingImage.data;
-    body.image_mime = pendingImage.mime;
-    delete (window as any).__pendingImage;
+  if (imgData && imgMime) {
+    body.image_data = imgData;
+    body.image_mime = imgMime;
   }
 
   try {
@@ -980,31 +995,13 @@ async function initWorkspace(): Promise<void> {
 
 // ── FILE ATTACH ──
 async function uploadImage(file: File): Promise<void> {
-  const formData = new FormData();
-  formData.append("file", file);
-
-  try {
-    const res = await fetch(`${API_BASE}/api/v1/upload/image`, {
-      method: "POST",
-      body: formData,
-    });
-    if (res.ok) {
-      const data = await res.json();
-      (window as any).__pendingImage = {
-        data: data.image_data,
-        mime: data.mime_type,
-        filename: data.filename,
-      };
-      messageInput.value = messageInput.value
-        ? messageInput.value + `\n[📷 ${data.filename}]`
-        : `[📷 ${data.filename}]`;
-      messageInput.dispatchEvent(new Event("input"));
-    } else {
-      appendMessage("assistant", `⚠️ Error al subir imagen: ${res.statusText}`);
-    }
-  } catch (err) {
-    appendMessage("assistant", `⚠️ Error al subir imagen: ${err}`);
-  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    const result = reader.result as string;
+    const b64 = result.split(",")[1];
+    setImagePreview(b64, file.type, file.name);
+  };
+  reader.readAsDataURL(file);
 }
 
 function initFileAttach(): void {
@@ -1016,7 +1013,7 @@ function initFileAttach(): void {
       const others = files.filter((f) => !f.type.startsWith("image/"));
 
       if (images.length > 0) {
-        uploadImage(images[0]);
+        handleImageFile(images[0]);
       }
 
       if (others.length > 0) {
@@ -1029,6 +1026,87 @@ function initFileAttach(): void {
       fileInput.value = "";
       messageInput.dispatchEvent(new Event("input"));
       messageInput.focus();
+    }
+  });
+}
+
+// ── IMAGE PREVIEW ──
+function setImagePreview(data: string, mime: string, filename: string): void {
+  const container = document.getElementById("image-preview")!;
+  container.innerHTML = `
+    <div class="preview-thumb">
+      <img src="data:${mime};base64,${data}" alt="${filename}" />
+      <button class="remove-preview" title="Quitar imagen">&times;</button>
+    </div>
+  `;
+  container.classList.remove("hidden");
+  container.querySelector(".remove-preview")!.addEventListener("click", clearImagePreview);
+  (window as any).__pendingImage = { data, mime, filename };
+}
+
+function clearImagePreview(): void {
+  const container = document.getElementById("image-preview")!;
+  container.classList.add("hidden");
+  container.innerHTML = "";
+  delete (window as any).__pendingImage;
+}
+
+function handleImageFile(file: File): void {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const result = reader.result as string;
+    const b64 = result.split(",")[1];
+    setImagePreview(b64, file.type, file.name);
+  };
+  reader.readAsDataURL(file);
+}
+
+// ── DRAG & DROP ──
+function initDragDrop(): void {
+  const inputBar = document.getElementById("input-bar")!;
+
+  inputBar.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    inputBar.classList.add("drag-over");
+  });
+
+  inputBar.addEventListener("dragleave", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    inputBar.classList.remove("drag-over");
+  });
+
+  inputBar.addEventListener("drop", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    inputBar.classList.remove("drag-over");
+
+    const files = e.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+
+    for (const file of Array.from(files)) {
+      if (file.type.startsWith("image/")) {
+        handleImageFile(file);
+        break;
+      }
+    }
+  });
+}
+
+// ── PASTE IMAGE ──
+function initPasteImage(): void {
+  messageInput.addEventListener("paste", (e: ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith("image/")) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) handleImageFile(file);
+        break;
+      }
     }
   });
 }
@@ -1132,6 +1210,8 @@ document.addEventListener("DOMContentLoaded", () => {
   initMetrics();
   initWorkspace();
   initFileAttach();
+  initDragDrop();
+  initPasteImage();
   renderSidebar();
   updateMainView();
 

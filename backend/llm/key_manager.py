@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import time
 import random
 from dotenv import load_dotenv
@@ -66,6 +67,12 @@ class APIKeyManager:
             if key not in self._blacklisted_until or self._blacklisted_until[key] <= now:
                 return
             self._index = (self._index + 1) % len(self._keys)
+
+    def get_retry_delay(self, error: Exception) -> float | None:
+        match = re.search(r'Please retry in\s+([\d.]+)s', str(error))
+        if match:
+            return float(match.group(1))
+        return None
 
     def is_exhausted_error(self, error: Exception) -> bool:
         code = getattr(error, "code", None)

@@ -30,6 +30,13 @@ def _serialize_parts(parts: list[types.Part]) -> list[dict]:
     for p in parts:
         if p.text is not None:
             serialized.append({"type": "text", "text": p.text})
+        elif p.inline_data is not None:
+            import base64
+            serialized.append({
+                "type": "inline_data",
+                "mime_type": p.inline_data.mime_type,
+                "data": base64.b64encode(p.inline_data.data).decode("utf-8"),
+            })
         elif p.function_call is not None:
             serialized.append({
                 "type": "function_call",
@@ -51,6 +58,12 @@ def _deserialize_parts(data: list[dict]) -> list[types.Part]:
         t = item["type"]
         if t == "text":
             parts.append(types.Part.from_text(text=item["text"]))
+        elif t == "inline_data":
+            import base64
+            parts.append(types.Part.from_bytes(
+                data=base64.b64decode(item["data"]),
+                mime_type=item["mime_type"],
+            ))
         elif t == "function_call":
             parts.append(types.Part.from_function_call(
                 name=item["name"], args=dict(item["args"])

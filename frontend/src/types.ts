@@ -2,6 +2,8 @@ export interface Message {
   role: "user" | "assistant";
   text: string;
   timestamp?: number;
+  image_data?: string;
+  image_mime?: string;
 }
 
 export interface ChatSession {

@@ -46,8 +46,9 @@ class GeminiProvider(LLMProvider):
         self._client = genai.Client(api_key=self._key_manager.current_key)
         return self._client
 
-    def _call_with_retry(self, func, max_retries: int = 3, cooldown: int = 120):
+    def _call_with_retry(self, func, max_retries: int = 5, cooldown: int = 120):
         last_error = None
+        base_delay = 5
         for attempt in range(max_retries):
             try:
                 return func()
@@ -57,8 +58,17 @@ class GeminiProvider(LLMProvider):
                     raise
                 if attempt == max_retries - 1:
                     raise
-                rotated = self._key_manager.handle_error(e, cooldown)
+
+                suggested = self._key_manager.get_retry_delay(e)
+                if suggested is not None:
+                    delay = suggested + 0.5
+                    time.sleep(delay)
+                    continue
+
+                delay = base_delay * (2 ** attempt)
+                rotated = self._key_manager.handle_error(e, cooldown=max(delay, cooldown))
                 self._rebuild_client()
+                time.sleep(delay)
         raise last_error  # type: ignore
 
     def generate_content(
