@@ -1,5 +1,4 @@
 import json
-import os
 import subprocess
 import urllib.request
 import urllib.error
@@ -107,7 +106,7 @@ class OllamaProvider(LLMProvider):
         except Exception as e:
             raise RuntimeError(f"Ollama request failed: {e}")
 
-    def generate_with_image(self, prompt: str, image_base64: str) -> str:
+    def generate_with_image(self, prompt: str, image_base64: str, mime_type: str = "image/png") -> str:
         body = {
             "model": self.model,
             "messages": [{

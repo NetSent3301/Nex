@@ -18,12 +18,18 @@ from tools.terminal import RunCommand
 from tools.git import GitTool
 from tools.web import WebFetchTool, WebSearchTool
 from tools.code_analysis import CodeAnalysisTool
-from tools.refactoring import RefactorTool
-from tools.mcp import MCPTool
 from tools.skills import SkillsTool
 from tools.lsp import LSPTool
 from tools.sessions import SessionTool
 from tools.image_tool import ReadImageTool, ImageInfoTool
+from tools.recon import (
+    DnsLookupTool,
+    WhoisLookupTool,
+    HttpFingerprintTool,
+    TlsProbeTool,
+    HashIdentifyTool,
+    FileMetadataTool,
+)
 from tools.errors import ToolError
 
 
@@ -50,7 +56,6 @@ class Registry:
         tool = self.get(name)
         return tool.execute(**kwargs)
 
- 
     def gemini_declarations(self) -> list[dict[str, Any]]:
         declarations = []
         for name in sorted(self._tools):
@@ -90,12 +95,16 @@ def create_default_registry() -> Registry:
         WebFetchTool(),
         WebSearchTool(),
         CodeAnalysisTool(),
-        RefactorTool(),
-        MCPTool(),
         SkillsTool(),
         LSPTool(),
         SessionTool(),
         ReadImageTool(),
         ImageInfoTool(),
+        DnsLookupTool(),
+        WhoisLookupTool(),
+        HttpFingerprintTool(),
+        TlsProbeTool(),
+        HashIdentifyTool(),
+        FileMetadataTool(),
     )
     return registry

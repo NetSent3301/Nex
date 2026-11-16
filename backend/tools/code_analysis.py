@@ -88,7 +88,6 @@ class CodeAnalysisTool(Tool):
             "yml": "YAML",
             "md": "Markdown",
             "sh": "Shell",
-            "ts": "TypeScript",
         }
 
         if path.is_file():

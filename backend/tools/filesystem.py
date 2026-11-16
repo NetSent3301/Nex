@@ -182,7 +182,7 @@ class CreateDirectoryTool(Tool):
 
 class DeletePathTool(Tool):
     name = "delete_path"
-    description = "Delete a file or empty directory from the workspace."
+    description = "Delete a file or directory (recursively) from the workspace."
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -208,7 +208,7 @@ class DeletePathTool(Tool):
 
         try:
             if safe_path.is_dir():
-                safe_path.rmdir()
+                shutil.rmtree(safe_path)
             else:
                 safe_path.unlink()
             return {"success": True, "path": str(safe_path)}

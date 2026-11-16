@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.tool import Tool
-from tools.errors import ToolError
+from tools.errors import ToolError, validate_path_safety
 
 
 class SessionTool(Tool):
@@ -125,7 +125,7 @@ class SessionTool(Tool):
         self, session_id: str, export_path: str,
         storage_dir: str, workspace: str
     ) -> dict[str, Any]:
-        from storage.memory import load_chat_history, _get_history_file
+        from storage.memory import _get_history_file
 
         try:
             history_file = _get_history_file(session_id) if session_id != "default" else os.path.join(storage_dir, ".nex_history.json")
@@ -148,7 +148,6 @@ class SessionTool(Tool):
         else:
             dest = Path(workspace) / f"nex_session_{session_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 
-        from tools.errors import validate_path_safety
         validate_path_safety(str(dest), workspace)
 
         data["exported_at"] = datetime.now(timezone.utc).isoformat()
@@ -171,8 +170,6 @@ class SessionTool(Tool):
         self, import_path: str, new_session_id: str,
         storage_dir: str, workspace: str
     ) -> dict[str, Any]:
-        from tools.errors import validate_path_safety
-
         safe_import = Path(validate_path_safety(import_path, workspace))
         if not safe_import.exists():
             raise ToolError(f"Import file not found: {import_path}")

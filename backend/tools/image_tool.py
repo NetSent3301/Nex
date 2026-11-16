@@ -30,7 +30,6 @@ class ReadImageTool(Tool):
 
     def execute(self, **kwargs: Any) -> dict[str, Any]:
         path: str = kwargs["path"]
-        prompt: str = kwargs.get("prompt", "")
         workspace: str = kwargs.get("workspace_root", os.getcwd())
 
         safe_path = Path(validate_path_safety(path, workspace))

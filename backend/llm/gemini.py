@@ -1,23 +1,18 @@
 import os
+import random
 import time
+
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from llm.provider import LLMProvider
+
+from config.loader import build_system_prompt
 from llm.key_manager import APIKeyManager
-from utils.helpers import get_current_datetime_str, get_system_info
-from config.loader import load_system_prompt
+from llm.provider import LLMProvider
 
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 
-fecha = get_current_datetime_str()
-sistema = get_system_info()
-system_prompt = (
-    f"{load_system_prompt()}\n\n"
-    f"[INFORMACION EN TIEMPO REAL DEL SISTEMA/FECHA]\n"
-    f"- Fecha y hora actual: {fecha}\n"
-    f"- Información del sistema: {sistema}\n"
-)
+system_prompt = build_system_prompt()
 
 
 class GeminiProvider(LLMProvider):
@@ -34,41 +29,48 @@ class GeminiProvider(LLMProvider):
             else:
                 self._key_manager = APIKeyManager()
         self._client: genai.Client | None = None
+        self._client_key: str | None = None
         self.model = model
 
     @property
     def client(self) -> genai.Client:
-        if self._client is None:
-            self._client = genai.Client(api_key=self._key_manager.current_key)
+        key = self._key_manager.current_key
+        if self._client is None or self._client_key != key:
+            self._client = genai.Client(api_key=key)
+            self._client_key = key
         return self._client
 
     def _rebuild_client(self) -> genai.Client:
-        self._client = genai.Client(api_key=self._key_manager.current_key)
+        key = self._key_manager.current_key
+        self._client = genai.Client(api_key=key)
+        self._client_key = key
         return self._client
 
     def _call_with_retry(self, func, max_retries: int = 5, cooldown: int = 120):
         last_error = None
-        base_delay = 5
         for attempt in range(max_retries):
+            self._key_manager.select_available()
             try:
                 return func()
             except Exception as e:
                 last_error = e
                 if not self._key_manager.is_exhausted_error(e):
                     raise
-                if attempt == max_retries - 1:
-                    raise
+                if attempt >= max_retries - 1:
+                    break
 
                 suggested = self._key_manager.get_retry_delay(e)
-                if suggested is not None:
-                    delay = suggested + 0.5
-                    time.sleep(delay)
-                    continue
-
-                delay = base_delay * (2 ** attempt)
-                rotated = self._key_manager.handle_error(e, cooldown=max(delay, cooldown))
+                key_cooldown = suggested + 0.5 if suggested is not None else cooldown
+                available = self._key_manager.blacklist_current(key_cooldown)
                 self._rebuild_client()
-                time.sleep(delay)
+
+                if available is None:
+                    wait = self._key_manager.time_until_available(
+                        cap=key_cooldown
+                    ) + random.uniform(0, 0.5)
+                else:
+                    wait = random.uniform(0.3, 0.8)
+                time.sleep(wait)
         raise last_error  # type: ignore
 
     def generate_content(
@@ -80,6 +82,22 @@ class GeminiProvider(LLMProvider):
     ):
         def call():
             return self.client.models.generate_content(
+                model=model or self.model,
+                contents=contents,
+                config=config,
+            )
+        return self._call_with_retry(call, max_retries=max_retries)
+
+    def generate_content_stream(
+        self,
+        model: str | None = None,
+        contents=None,
+        config=None,
+        max_retries: int = 3,
+    ):
+        """Stream a generation response chunk by chunk."""
+        def call():
+            return self.client.models.generate_content_stream(
                 model=model or self.model,
                 contents=contents,
                 config=config,

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.tool import Tool
-from tools.errors import ToolError, validate_path_safety
+from tools.errors import ToolError
 
 
 class SkillsTool(Tool):

@@ -32,6 +32,7 @@ backend/.env
 backend/.nex_keys.json
 backend/.nex_settings.json
 backend/storage/.nex_history*.json
+backend/storage/.nex_alerts.json
 
 # Project snapshots / generated docs
 nex_project_structure.txt

@@ -132,7 +132,7 @@ class WebSearchTool(Tool):
                         "snippet": item.get("snippet", ""),
                     })
                 return {"success": True, "results": results, "query": query}
-        except Exception as e:
+        except Exception:
             return self._search_fallback(query, max_results)
 
     def _search_fallback(self, query: str, max_results: int) -> dict[str, Any]:

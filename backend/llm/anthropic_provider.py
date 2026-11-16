@@ -2,10 +2,20 @@ import json
 import os
 from typing import Any
 
+import httpx
+
 from llm.provider import LLMProvider
+from llm.utils import (
+    convert_content_to_anthropic_messages,
+    convert_tools_to_anthropic,
+    get_temperature,
+    async_post_json,
+)
 
 
 class AnthropicProvider(LLMProvider):
+    BASE_URL = "https://api.anthropic.com/v1/messages"
+
     def __init__(
         self,
         api_key: str | None = None,
@@ -18,12 +28,23 @@ class AnthropicProvider(LLMProvider):
             )
         self.model = model
 
+    async def _post(
+        self, body: dict[str, Any], timeout: int = 120
+    ) -> dict[str, Any]:
+        return await async_post_json(
+            self.BASE_URL,
+            {
+                "Content-Type": "application/json",
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            body,
+            timeout=timeout,
+        )
+
     async def generate(
         self, messages: list[dict] | str, tools: list[dict] | None = None
     ) -> Any:
-        import urllib.request
-        import urllib.error
-
         if isinstance(messages, str):
             messages = [{"role": "user", "content": messages}]
 
@@ -34,37 +55,12 @@ class AnthropicProvider(LLMProvider):
         }
 
         if tools:
-            anthropic_tools = []
-            for t in tools:
-                fn = t.get("function_declarations", [{}])[0] if "function_declarations" in t else t
-                anthropic_tools.append({
-                    "name": fn.get("name", ""),
-                    "description": fn.get("description", ""),
-                    "input_schema": fn.get("parameters", {}),
-                })
+            anthropic_tools = convert_tools_to_anthropic(tools)
             if anthropic_tools:
                 body["tools"] = anthropic_tools
 
-        payload = json.dumps(body).encode()
-        req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages",
-            data=payload,
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": self.api_key,
-                "anthropic-version": "2023-06-01",
-            },
-        )
-
-        try:
-            with urllib.request.urlopen(req, timeout=120) as response:
-                result = json.loads(response.read().decode())
-                return self._parse_response(result)
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode()
-            raise RuntimeError(f"Anthropic API error {e.code}: {error_body}")
-        except Exception as e:
-            raise RuntimeError(f"Anthropic request failed: {e}")
+        result = await self._post(body)
+        return self._parse_response(result)
 
     def generate_sync(self, message: str) -> str:
         import urllib.request
@@ -78,7 +74,7 @@ class AnthropicProvider(LLMProvider):
 
         payload = json.dumps(body).encode()
         req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages",
+            self.BASE_URL,
             data=payload,
             headers={
                 "Content-Type": "application/json",
@@ -127,115 +123,53 @@ class AnthropicProvider(LLMProvider):
         return ResponseWrapper(result)
 
     def generate_content(self, contents: list = None, config=None):
-        from google.genai import types as genai_types
-
         system_instruction = None
-        if config and hasattr(config, 'system_instruction') and config.system_instruction:
+        if (
+            config
+            and hasattr(config, "system_instruction")
+            and config.system_instruction
+        ):
             system_instruction = config.system_instruction
-        temperature = None
-        if config and hasattr(config, 'temperature') and config.temperature is not None:
-            temperature = config.temperature
-        if temperature is None:
-            try:
-                from storage.settings import get_settings
-                temperature = get_settings().get("temperature", 0.7)
-            except Exception:
-                temperature = 0.7
+        temperature = get_temperature(config)
         tools = None
-        if config and hasattr(config, 'tools') and config.tools:
+        if config and hasattr(config, "tools") and config.tools:
             tools = config.tools
 
-        messages = []
-        for content in (contents or []):
-            if content is None:
-                continue
-            role = getattr(content, "role", "user")
-            role = "assistant" if role == "model" else role
-            text_parts: list[str] = []
-            tool_uses = []
-            is_tool_response = False
-            for part in (getattr(content, "parts", None) or []):
-                if part is None:
-                    continue
-                try:
-                    if hasattr(part, "text") and part.text is not None:
-                        text_parts.append(str(part.text))
-                except Exception:
-                    pass
-                try:
-                    fc = getattr(part, "function_call", None)
-                    if fc is not None:
-                        args = dict(fc.args) if hasattr(fc, 'args') and fc.args else {}
-                        tool_uses.append({
-                            "type": "tool_use",
-                            "id": f"toolu_{fc.name}",
-                            "name": str(fc.name) if hasattr(fc, 'name') else "",
-                            "input": args,
-                        })
-                except Exception:
-                    pass
-                try:
-                    fr = getattr(part, "function_response", None)
-                    if fr is not None:
-                        is_tool_response = True
-                        resp = dict(fr.response) if hasattr(fr, 'response') and fr.response else {}
-                        text_parts.append(json.dumps(resp, ensure_ascii=False))
-                except Exception:
-                    pass
-            if is_tool_response:
-                messages.append({"role": "user", "content": "\n".join(text_parts) if text_parts else ""})
-            elif tool_uses:
-                content_block: list[dict] = []
-                if text_parts:
-                    content_block.append({"type": "text", "text": "\n".join(text_parts)})
-                content_block.extend(tool_uses)
-                messages.append({"role": "assistant", "content": content_block})
-            else:
-                messages.append({"role": role, "content": "\n".join(text_parts) if text_parts else ""})
-
-        if not messages or all(
-            isinstance(m.get("content"), str) and not m["content"].strip()
-            for m in messages if isinstance(m.get("content"), str)
-        ):
-            messages = [{"role": "user", "content": "Hello"}]
+        system, messages = convert_content_to_anthropic_messages(
+            contents, system_instruction
+        )
 
         body: dict[str, Any] = {
             "model": self.model,
             "max_tokens": 8192,
+            "temperature": temperature,
             "messages": messages,
         }
-        if system_instruction:
-            body["system"] = system_instruction
+        if system:
+            body["system"] = system
         if tools:
-            anthropic_tools = []
-            for t in tools:
-                fn = t.get("function_declarations", [{}])[0] if isinstance(t, dict) and "function_declarations" in t else t
-                anthropic_tools.append({
-                    "name": fn.get("name", ""),
-                    "description": fn.get("description", ""),
-                    "input_schema": fn.get("parameters", {}),
-                })
+            anthropic_tools = convert_tools_to_anthropic(tools)
             if anthropic_tools:
                 body["tools"] = anthropic_tools
 
-        import urllib.request, urllib.error
-        payload = json.dumps(body).encode()
-        req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages",
-            data=payload,
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": self.api_key,
-                "anthropic-version": "2023-06-01",
-            },
-        )
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                result = json.loads(resp.read().decode())
-                return self._parse_response(result)
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode()
-            raise RuntimeError(f"Anthropic API error {e.code}: {error_body}")
+            resp = httpx.post(
+                self.BASE_URL,
+                json=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": self.api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+                timeout=120,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            return self._parse_response(result)
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(
+                f"Anthropic API error {e.response.status_code}: {e.response.text}"
+            )
         except Exception as e:
             raise RuntimeError(f"Anthropic request failed: {e}")
 

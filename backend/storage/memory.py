@@ -75,7 +75,9 @@ def _deserialize_parts(data: list[dict]) -> list[types.Part]:
     return parts
 
 
-def save_chat_history(messages: list, session_id: str = "default") -> None:
+def save_chat_history(
+    messages: list, session_id: str = "default", workspace: str | None = None
+) -> None:
     serialized = []
     for m in messages:
         if isinstance(m, str):
@@ -92,6 +94,8 @@ def save_chat_history(messages: list, session_id: str = "default") -> None:
             })
 
     data = {"updated_at": _now(), "messages": serialized}
+    if workspace:
+        data["workspace"] = os.path.abspath(workspace)
     history_file = _get_history_file(session_id)
 
     if os.path.exists(history_file):
@@ -108,7 +112,7 @@ def save_chat_history(messages: list, session_id: str = "default") -> None:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
-def load_chat_history(session_id: str = "default") -> list:
+def load_chat_history(session_id: str = "default", workspace: str | None = None) -> list:
     history_file = _get_history_file(session_id)
     if not os.path.exists(history_file):
         return []
@@ -117,6 +121,14 @@ def load_chat_history(session_id: str = "default") -> list:
         with open(history_file, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (json.JSONDecodeError, FileNotFoundError):
+        return []
+
+    stored_workspace = data.get("workspace")
+    if (
+        workspace is not None
+        and stored_workspace
+        and os.path.abspath(workspace) != stored_workspace
+    ):
         return []
 
     messages = []
@@ -129,6 +141,19 @@ def load_chat_history(session_id: str = "default") -> list:
                 parts=_deserialize_parts(item["parts"]),
             ))
     return messages
+
+
+def get_history_workspace(session_id: str = "default") -> str | None:
+    """Workspace con el que se guardó el historial, o None si no consta."""
+    history_file = _get_history_file(session_id)
+    if not os.path.exists(history_file):
+        return None
+    try:
+        with open(history_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, FileNotFoundError):
+        return None
+    return data.get("workspace")
 
 
 def trim_messages(messages: list, max_messages: int = MAX_HISTORY_MESSAGES) -> list:

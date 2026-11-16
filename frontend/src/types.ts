@@ -21,7 +21,7 @@ export interface SystemMetrics {
   cpu: number;
 }
 
-export type SessionGroup = "Hoy" | "Ayer" | "Últimos 7 días" | "Anterior";
+export type SessionGroup = "today" | "yesterday" | "last7" | "older";
 
 export interface ProviderInfo {
   name: string;

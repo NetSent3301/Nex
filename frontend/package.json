@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "electron": "^33.0.0",
+    "freellm": "^1.0.2",
     "marked": "^18.0.5"
   },
   "devDependencies": {

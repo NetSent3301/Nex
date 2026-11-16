@@ -75,12 +75,12 @@ def create_default_manager() -> LLMManager:
         models = ollama.list_models()
         if models:
             manager.register("ollama", ollama)
-        else:
-            for model in models:
-                try:
-                    manager.register(f"ollama/{model}", OllamaProvider(model=model))
-                except Exception:
-                    pass
+    except Exception:
+        pass
+
+    try:
+        from llm.freellm_provider import FreeLLMProvider
+        manager.register("freellm", FreeLLMProvider())
     except Exception:
         pass
 

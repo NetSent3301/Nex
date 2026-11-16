@@ -1,8 +1,12 @@
+import logging
 import subprocess
 from typing import Any
 
 from tools.tool import Tool
 from tools.errors import ToolError
+from tools.security import confirm_or_deny
+
+logger = logging.getLogger("nex.tools.git")
 
 
 class GitTool(Tool):
@@ -36,6 +40,15 @@ class GitTool(Tool):
 
         cmd = f"git {args.strip()}"
 
+        allowed, block_output = confirm_or_deny(cmd)
+        if not allowed:
+            logger.warning(f"Blocked dangerous git command: {cmd}")
+            return {
+                "success": False,
+                "exit_code": -1,
+                "output": block_output,
+            }
+
         try:
             result = subprocess.run(
                 cmd,
@@ -59,6 +72,7 @@ class GitTool(Tool):
             }
 
         except subprocess.TimeoutExpired:
+            logger.warning(f"Git command timed out: {cmd[:200]}")
             return {
                 "success": False,
                 "exit_code": -1,
@@ -71,4 +85,5 @@ class GitTool(Tool):
                 "output": "Git not found. Is git installed?",
             }
         except Exception as e:
+            logger.error(f"Failed to execute git command '{cmd[:200]}': {e}")
             raise ToolError(f"Failed to execute git command: {e}")

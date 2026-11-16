@@ -1,62 +1,1258 @@
-#!/usr/bin/env bash
-set -e
+#!/usr/bin/env python3
+"""Nex - AI Terminal Assistant (interactivo con Gemini real, streaming + animaciones)."""
+import sys
+import time
+import json
+import queue
+import logging
+import threading
+import argparse
+import os
+import atexit
+import tty
 
-NEX_DIR="$(cd "$(dirname "$0")" && pwd)"
-VENV_PYTHON="$NEX_DIR/.venv/bin/python"
-VENV_UVICORN="$NEX_DIR/.venv/bin/uvicorn"
-FRONTEND="$NEX_DIR/frontend"
-ELECTRON="$FRONTEND/node_modules/.bin/electron"
-BACKEND_PORT="${NEX_PORT:-8765}"
+import colorama
+colorama.init()
+from colorama import Fore, Style
 
-cleanup() {
-  echo ""
-  echo "Deteniendo Nex..."
-  if [ -n "$BACKEND_PID" ] && kill -0 "$BACKEND_PID" 2>/dev/null; then
-    kill "$BACKEND_PID" 2>/dev/null
-    wait "$BACKEND_PID" 2>/dev/null
-  fi
-  exit 0
+# Add backend to path
+BASE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(BASE, "backend"))
+
+# Add virtual environment site-packages if it exists
+VENV_DIR = os.path.join(BASE, ".venv")
+if os.path.isdir(VENV_DIR):
+    import glob
+    site_dirs = glob.glob(os.path.join(VENV_DIR, "lib", "python*", "site-packages"))
+    if site_dirs:
+        sys.path.insert(0, site_dirs[0])
+
+from tools.registry import create_default_registry
+
+R = Fore.RED; G = Fore.GREEN; Y = Fore.YELLOW; B = Fore.BLUE
+M = Fore.MAGENTA; C = Fore.CYAN; W = Fore.WHITE; RS = Style.RESET_ALL
+INV = "\x1b[7m"
+
+SLASH_COMMANDS = [
+    "/connect", "/help", "/model", "/providers", "/status", "/tools", "/use",
+    "/new", "/reset", "/stop", "/compact", "/traces", "/retry", "/undo",
+    "/goal", "/clear",
+]
+SLASH_DESC = {
+    "/connect": "conectar/activar un provider",
+    "/help": "este listado",
+    "/model": "cambiar modelo",
+    "/providers": "estado de todos los proveedores",
+    "/status": "estado del agente",
+    "/tools": "listar herramientas",
+    "/use": "cambiar provider solo para la sesión",
+    "/new": "nueva sesión (contexto fresco)",
+    "/reset": "igual que /new",
+    "/stop": "detener la ejecución en curso",
+    "/compact": "comprimir el contexto",
+    "/traces": "ver trazas de tools",
+    "/retry": "reintentar la última pregunta",
+    "/undo": "quitar el último intercambio",
+    "/goal": "definir un objetivo",
+    "/clear": "limpiar el historial de la sesión",
 }
-trap cleanup SIGINT SIGTERM
 
-# ── Workspace: directorio desde donde se ejecuta el comando ──
-WORKSPACE="$PWD"
-export NEX_WORKSPACE="$WORKSPACE"
-echo "Workspace: $WORKSPACE"
+SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+TOOL_FRAMES = ["🛠️", "🔧", "⚙️", "🔩", "🛠️", "⚙️", "🔧", "🔩"]
+RETRIES_503 = 4
+RETRY_DELAY = int(os.environ.get("NEX_RETRY_DELAY", "5"))
+RETRY_MAX_SLEEP = int(os.environ.get("NEX_RETRY_MAX_SLEEP", "15"))
+MAX_ITERATIONS = 10
 
-# ── Construir frontend si es necesario ──
-if [ ! -f "$FRONTEND/dist/main.js" ] || [ ! -f "$FRONTEND/dist/index.html" ]; then
-  echo "Compilando frontend..."
-  npm run build --prefix "$FRONTEND" > /dev/null 2>&1
-fi
+logger = logging.getLogger("nex.cli")
 
-# ── Matar backend previo si existe ──
-if lsof -ti :"$BACKEND_PORT" > /dev/null 2>&1; then
-  echo "Cerrando servidor anterior..."
-  kill $(lsof -ti :"$BACKEND_PORT") 2>/dev/null
-  sleep 0.5
-fi
+TRACES_FILE = os.path.join(BASE, "backend", "storage", ".nex_traces.jsonl")
+MAX_TOOL_OUTPUT_CHARS = 20000
 
-# ── Iniciar backend ──
-echo "Iniciando servidor..."
-cd "$NEX_DIR/backend"
-$VENV_UVICORN api.routes:app --host 127.0.0.1 --port "$BACKEND_PORT" &
-BACKEND_PID=$!
-cd "$NEX_DIR"
+# ── Hooks de lifecycle / extensibilidad ────────────────────────────
+# Los hooks reciben un único argumento ctx (dict). Eventos:
+#   session_start, turn_start, tool_before, tool_after, turn_end, session_end
+_HOOKS: dict[str, list] = {}
 
-# ── Esperar a que el backend responda ──
-for i in $(seq 1 30); do
-  if curl -s "http://127.0.0.1:$BACKEND_PORT/api/v1/health" > /dev/null 2>&1; then
-    break
-  fi
-  sleep 0.3
-done
 
-# ── Iniciar Electron ──
-echo "Iniciando interfaz..."
-$ELECTRON "$FRONTEND" --no-sandbox 2>/dev/null &
-ELECTRON_PID=$!
+def register_hook(event: str, fn) -> None:
+    _HOOKS.setdefault(event, []).append(fn)
 
-# Esperar a que Electron termine o recibir señal
-wait $ELECTRON_PID 2>/dev/null
-cleanup
+
+def run_hooks(event: str, **ctx) -> None:
+    for fn in _HOOKS.get(event, []):
+        try:
+            fn(ctx)
+        except Exception as e:
+            logger.warning("Hook '%s' falló: %s", event, e)
+
+
+def _write_trace(entry: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(TRACES_FILE), exist_ok=True)
+        with open(TRACES_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def _hook_trace_tool(ctx: dict) -> None:
+    args = json.dumps(ctx.get("args", {}), ensure_ascii=False, default=str)
+    _write_trace({
+        "event": "tool_after",
+        "ts": time.time(),
+        "tool": ctx.get("name"),
+        "args": args[:800],
+        "duration_s": round(float(ctx.get("duration_s", 0)), 3),
+        "success": bool(ctx.get("success", True)),
+        "issues": ctx.get("issues", []),
+    })
+
+
+register_hook("tool_after", _hook_trace_tool)
+
+
+def load_user_hooks() -> int:
+    """Carga hooks externos (logging/CI/políticas) sin tocar el código de nex.
+
+    Fuente: $NEX_HOOKS o ~/.config/nex/hooks.py. El módulo expone
+    `HOOKS = {"evento": [fn], ...}` y cada fn recibe ctx (dict).
+    """
+    path = os.environ.get("NEX_HOOKS") or os.path.expanduser("~/.config/nex/hooks.py")
+    if not os.path.isfile(path):
+        return 0
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("nex_user_hooks", path)
+    mod = importlib.util.module_from_spec(spec)
+    if spec.loader is None:
+        return 0
+    spec.loader.exec_module(mod)
+    mapping = getattr(mod, "HOOKS", None) or {}
+    count = 0
+    for event, fns in mapping.items():
+        for fn in (fns if isinstance(fns, list) else [fns]):
+            if callable(fn):
+                register_hook(event, fn)
+                count += 1
+    return count
+
+
+# ── Helpers puros (testeables) ─────────────────────────────────────
+
+def validate_tool_result(name: str, result, max_chars: int = MAX_TOOL_OUTPUT_CHARS):
+    """Valida el output de una tool: forma, fallo y tamaño antes de confiarlo al modelo."""
+    issues: list[str] = []
+    if not isinstance(result, dict):
+        issues.append("salida no es dict; envuelta en {'result': ...}")
+        result = {"result": result}
+
+    def _cap(v):
+        if isinstance(v, str):
+            if len(v) > max_chars:
+                issues.append(f"salida truncada ({len(v)} → {max_chars} chars)")
+                return v[:max_chars] + "\n...[truncado: {0} chars omitidos]".format(len(v) - max_chars)
+            return v
+        if isinstance(v, dict):
+            return {k: _cap(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [_cap(x) for x in v]
+        return v
+
+    if result.get("success") is False:
+        issues.append("la tool reportó fallo")
+    result = _cap(result)
+    return result, list(dict.fromkeys(issues))
+
+
+class StopInterrupt(Exception):
+    """Se lanza cuando el usuario pide /stop durante una ejecución."""
+
+
+class Spinner:
+    """Simple animated spinner running on a background thread."""
+
+    def __init__(self, msg="Pensando...", frames=None, interval=0.08):
+        self.msg = msg
+        self.frames = frames or SPIN_FRAMES
+        self.interval = interval
+        self.running = False
+        self.thread = None
+
+    def start(self, msg=None):
+        if msg:
+            self.msg = msg
+        if self.running:
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._spin, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        if not self.running:
+            return
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=0.3)
+        try:
+            width = os.get_terminal_size().columns
+        except OSError:
+            width = 80
+        sys.stdout.write("\r" + " " * width + "\r")
+        sys.stdout.flush()
+
+    def _spin(self):
+        i = 0
+        while self.running:
+            frame = self.frames[i % len(self.frames)]
+            sys.stdout.write(f"\r  {Y}{frame}{RS} {self.msg}  ")
+            sys.stdout.flush()
+            time.sleep(self.interval)
+            i += 1
+
+
+class TermInput:
+    """Editor de línea con historial (flechas ↑/↓), backspace, Ctrl+D y menú
+    flotante de autocompletado para comandos (escribir '/') que se dibuja
+    encima del prompt en una pequeña ventana con bordes:
+
+    - ↑/↓ con menú abierto navegan la selección (sin menú, el historial).
+    - Tab completa la selección (o cicla entre las que coinciden).
+    - Enter acepta la selección y envía el comando.
+    - Esc oculta el menú.
+
+    Corre en el thread de lectura. Dibuja el prompt solo cuando el bucle
+    principal llama a `ask()` (para no intercalar el prompt con la salida del
+    agente). Mientras el agente está trabajando, lo escrito se muestra inline
+    sin redibujar.
+    """
+
+    def __init__(self, prompt: str = "Tu> "):
+        self.prompt = prompt
+        self.history: list[str] = []
+        self.buf = ""
+        self.idx = 0
+        self._waiting = True
+        self._hidden = False
+        self._sel = 0
+        self._open_rows = 0
+
+    def ask(self) -> None:
+        self._waiting = False
+        self._draw()
+
+    def _draw(self) -> None:
+        self._clear_area()
+        sys.stdout.write("\r" + self.prompt + self.buf + "\x1b[K")
+        menu = self._menu_lines()
+        if menu:
+            n = len(menu)
+            sys.stdout.write(f"\x1b[{n}A")
+            for i, line in enumerate(menu):
+                sys.stdout.write("\r" + line + "\x1b[K")
+                if i < n - 1:
+                    sys.stdout.write("\n")
+            sys.stdout.write("\r\n")
+            self._open_rows = n
+        sys.stdout.flush()
+
+    def _clear_area(self) -> None:
+        rows = self._open_rows
+        if rows:
+            sys.stdout.write(f"\x1b[{rows}A")
+            for _ in range(rows):
+                sys.stdout.write("\x1b[2K\x1b[B")
+            sys.stdout.write("\r")
+        self._open_rows = 0
+        sys.stdout.flush()
+
+    def _matches(self) -> list[str]:
+        return [c for c in SLASH_COMMANDS if c.startswith(self.buf)]
+
+    def _menu_lines(self) -> list[str]:
+        if self._waiting or self._hidden or not self.buf.startswith("/"):
+            return []
+        matches = self._matches()
+        if not matches:
+            return []
+        try:
+            cols = max(os.get_terminal_size().columns, 24)
+            lines_term = max(os.get_terminal_size().lines, 6)
+        except (OSError, ValueError):
+            cols, lines_term = 60, 24
+        max_rows = 5
+        self._sel = min(max(self._sel, 0), len(matches) - 1)
+        first = (self._sel // max_rows) * max_rows
+        page = matches[first : first + max_rows]
+
+        inner = 4 + max(len(f"/{m[1:]}") for m in page) if page else 8
+        if len(matches) > len(page):
+            inner = max(inner, 4 + len(f"{len(page)}/{len(matches)}"))
+        inner = min(inner, max(cols - 2, 8))
+        if lines_term < 7:
+            return []
+
+        box = [f"{M}┌{'─' * inner}┐{RS}"]
+        for i, m in enumerate(page):
+            idx = first + i
+            name = f"/{m[1:]}"
+            sel = idx == self._sel
+            marker = "▸ " if sel else "  "
+            pad = inner - 2 - len(marker) - len(name)
+            cell = f"{INV if sel else ''}{marker}{C}{name}{RS}{' ' * pad}"
+            box.append(f"{M}│{RS} {cell} {M}│{RS}")
+        if len(matches) > len(page):
+            info = f"  {len(page)}/{len(matches)} · más"
+            pad = inner - 2 - len(info)
+            box.append(f"{M}│{RS} {M}{info}{RS}{' ' * pad} {M}│{RS}")
+        box.append(f"{M}└{'─' * inner}┘{RS}")
+        return box
+
+    def _has_menu(self) -> bool:
+        return not self._waiting and not self._hidden and self.buf.startswith("/") and bool(self._matches())
+
+    def _accept_selection(self) -> None:
+        matches = self._matches()
+        if matches:
+            self._sel = min(max(self._sel, 0), len(matches) - 1)
+            self.buf = matches[self._sel]
+            self._hidden = True
+        self._sel = 0
+
+    def _submit(self) -> str:
+        if self._has_menu():
+            self._accept_selection()
+        else:
+            self._sel = 0
+        self._clear_area()
+        line = self.buf
+        sys.stdout.write("\r\n")
+        sys.stdout.flush()
+        self.buf = ""
+        self._waiting = True
+        if line and (not self.history or self.history[-1] != line):
+            self.history.append(line)
+        self.idx = len(self.history)
+        return line
+
+    def _navigate(self, delta: int) -> None:
+        new = min(max(self.idx + delta, 0), len(self.history))
+        if new == self.idx:
+            return
+        self.idx = new
+        self.buf = self.history[new] if new < len(self.history) else ""
+
+    def run(self, put) -> None:
+        fd = sys.stdin.fileno()
+        try:
+            old = tty.tcgetattr(fd)
+            tty.setcbreak(fd)
+            atexit.register(_restore_term, old)
+        except Exception:
+            old = None
+        if old is None:
+            while True:
+                line = sys.stdin.readline()
+                if not line:
+                    put(None)
+                    return
+                put(line.rstrip("\n"))
+            return
+
+        pending = b""
+        while True:
+            try:
+                data = os.read(fd, 4096)
+            except InterruptedError:
+                continue
+            if not data:
+                put(None)
+                return
+            pending += data
+            while pending:
+                ch = pending[0]
+                if ch == 27:
+                    # Secuencia de escape: solo consumir CSI (`ESC[`) o SS3
+                    # (`ESCO`) completas; un ESC suelto se descarta sin comerse
+                    # los bytes que el usuario escriba después.
+                    if len(pending) >= 2 and pending[1] == 91:
+                        idx = 2
+                        while idx < len(pending) and pending[idx] not in b"~@ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+                            idx += 1
+                        if idx < len(pending):
+                            seq = pending[: idx + 1]
+                            pending = pending[idx + 1:]
+                            if not self._waiting:
+                                if seq in (b"\x1b[A", b"\x1b[B"):
+                                    if self._has_menu():
+                                        matches = self._matches()
+                                        if seq == b"\x1b[A":
+                                            self._sel = (self._sel - 1) % len(matches)
+                                        else:
+                                            self._sel = (self._sel + 1) % len(matches)
+                                    else:
+                                        self._navigate(-1 if seq == b"\x1b[A" else 1)
+                                    self._draw()
+                        else:
+                            break  # CSI incompleta: esperar más bytes
+                    elif len(pending) >= 3 and pending[1] == 79:
+                        pending = pending[3:]
+                    elif not self._waiting:
+                        pending = pending[1:]
+                        self._hidden = True
+                        self._draw()
+                    else:
+                        pending = pending[1:]
+                elif ch in (0x0D, 0x0A):
+                    pending = pending[1:]
+                    put(self._submit())
+                elif ch == 0x09:
+                    pending = pending[1:]
+                    if not self._waiting and self.buf.startswith("/"):
+                        matches = self._matches()
+                        if len(matches) == 1:
+                            self.buf = matches[0]
+                        elif matches:
+                            self._sel = (self._sel + 1) % len(matches)
+                            self.buf = matches[self._sel]
+                        self._hidden = True
+                        self._draw()
+                    elif self._waiting:
+                        sys.stdout.write("  ")
+                        sys.stdout.flush()
+                elif ch == 0x04:
+                    pending = pending[1:]
+                    self._clear_area()
+                    put(None)
+                    return
+                elif ch in (0x7F, 0x08):
+                    pending = pending[1:]
+                    if self.buf:
+                        self.buf = self.buf[:-1]
+                        if self._waiting:
+                            sys.stdout.write("\b \b")
+                            sys.stdout.flush()
+                        else:
+                            self._sel = 0
+                            self._draw()
+                elif 32 <= ch < 127:
+                    c = pending[:1].decode()
+                    pending = pending[1:]
+                    if len(self.buf) < 4096:
+                        self.buf += c
+                        if self._waiting:
+                            sys.stdout.write(c)
+                            sys.stdout.flush()
+                        else:
+                            self._hidden = False
+                            self._sel = 0
+                            self._draw()
+                else:
+                    pending = pending[1:]
+
+
+def _restore_term(old) -> None:
+    try:
+        tty.tcsetattr(sys.stdin.fileno(), tty.TCSAFLUSH, old)
+    except Exception:
+        pass
+
+
+def _is_retryable(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return ("503" in msg or "unavailable" in msg or "high demand" in msg
+            or "429" in msg or "quota" in msg or "resource exhausted" in msg
+            or "load" in msg and "retry" in msg or "rate limit" in msg)
+
+
+def _retry_delay(exc: Exception, default: float = RETRY_DELAY) -> float:
+    import re
+    m = re.search(r"retry in\s+([\d.]+)s?", str(exc), re.IGNORECASE)
+    if m:
+        return max(0.5, float(m.group(1)) + 0.5)
+    m = re.search(r"retrydelay['\"]?:\s*['\"]?([\d.]+)s", str(exc), re.IGNORECASE)
+    if m:
+        return max(0.5, float(m.group(1)) + 0.5)
+    return default
+
+
+def provider_iter_content(provider, contents, config):
+    """Itera chunks compatibles con el bucle de nex.
+
+    Usa streaming si el provider lo soporta (`generate_content_stream`, solo
+    Gemini hoy); si no, envuelve `generate_content` en un único chunk con
+    texto y function_calls para que el resto del bucle sea provider-agnóstico.
+    """
+    stream_fn = getattr(provider, "generate_content_stream", None)
+    if stream_fn is not None:
+        yield from stream_fn(contents=contents, config=config)
+        return
+
+    response = provider.generate_content(contents=contents, config=config)
+    parts = []
+    text = getattr(response, "text", None)
+    if text:
+        parts.append(type("Part", (), {"text": text})())
+    for fc in getattr(response, "function_calls", None) or []:
+        parts.append(type("Part", (), {"function_call": fc})())
+    content = type("Content", (), {"parts": parts})()
+    candidate = type("Candidate", (), {"content": content})()
+    yield type("Chunk", (), {"candidates": [candidate]})()
+
+
+def parse_connect_text(text: str) -> tuple[str | None, dict]:
+    """Parsea '<provider> [--key K] [--url U] [--model M] [--start]' desde el chat."""
+    tokens = text.split()
+    target = None
+    flags: dict = {}
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if i == 0 and not t.startswith("-"):
+            target = t
+        elif t == "--start":
+            flags["start"] = True
+        elif t in ("--key", "--url", "--model") and i + 1 < len(tokens):
+            flags[t[2:]] = tokens[i + 1]
+            i += 1
+        i += 1
+    if not flags:
+        # sin flags: dos primeras palabras = provider y modelo (forma corta)
+        if target and len(tokens) >= 2 and not tokens[1].startswith("-"):
+            flags["model"] = tokens[1]
+    return target, flags
+
+
+def banner():
+    print(f"""{M}
+╔══════════════════════════════════════════════════════════════════╗
+║   {W}Nex — AI Terminal Assistant v0.2.0-dev{M}                          ║
+╚══════════════════════════════════════════════════════════════════╝{RS}""")
+
+
+def run_chat(args):
+    from config.loader import build_system_prompt
+    from llm.factory import build_provider
+    from storage.settings import get_workspace_path, get_settings
+    from storage.memory import (
+        MAX_HISTORY_MESSAGES,
+        load_chat_history,
+        save_chat_history,
+        trim_messages,
+        get_history_workspace,
+    )
+    from google.genai import types
+    from rich.console import Console
+    from rich.markdown import Markdown
+
+    console = Console(highlight=False)
+
+    ws = get_workspace_path()
+    if not ws:
+        print(f"\n{R}❌ No hay Workspace activo. Configuralo con: {B}nex set-workspace <ruta>{R}  o  export NEX_WORKSPACE=<ruta>{RS}")
+        return
+
+    banner()
+    active_provider = getattr(args, "provider", None) or get_settings().get("provider", "gemini")
+    active_model = getattr(args, "model", None) or get_settings().get("model", "(auto)")
+    print(f"\n  {G}Workspace:{W} {ws}{RS}")
+    print(f"  {G}IA:{W} {active_provider} · {active_model}{RS}")
+    print(f"  {C}Escribe '/help' para ver todos los comandos, 'exit' para salir.{RS}")
+    if sys.stdin.isatty():
+        console.print(f"  {M}💡 Escribe '/' en el prompt y se abre una ventana flotante de autocompletado de comandos (↑/↓, Tab, Enter).{RS}")
+    print()
+
+    try:
+        provider = build_provider(getattr(args, "provider", None), getattr(args, "model", None))
+    except Exception as e:
+        print(f"{R}❌ Error inicializando provider '{active_provider}': {e}{RS}")
+        print(f"{Y}💡 Conéctalos con 'nex providers' → 'nex connect <provider>' o revisa .env{RS}")
+        return
+
+    if not logging.getLogger().handlers:
+        logging.basicConfig(
+            level=os.environ.get("NEX_LOG_LEVEL", "WARNING").upper(),
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        )
+    # Silenciar loggers ruidosos de terceros (HTTP request/response de los SDKs).
+    for _noisy in ("httpx", "httpcore", "urllib3", "openai", "anthropic", "google"):
+        logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+    lang = get_settings().get("language", "es")
+    base_system_prompt = build_system_prompt(workspace_root=ws, language=lang)
+    goal = None
+
+    registry = create_default_registry()
+
+    hooks_loaded = load_user_hooks()
+    if hooks_loaded:
+        print(f"  {G}🔌 {hooks_loaded} hooks de usuario cargados{RS}")
+    run_hooks("session_start", workspace=ws, lang=lang, goal=goal)
+
+    historial_previo = load_chat_history("cli", workspace=ws)
+    historial_previo = trim_messages(historial_previo, MAX_HISTORY_MESSAGES)
+    chat_history = list(historial_previo)
+
+    if historial_previo:
+        print(f"  {M}📜 {len(historial_previo)} mensajes del historial recuperados{RS}")
+    elif get_history_workspace("cli"):
+        print(f"  {Y}🔄 El historial previo era de otro workspace y se ha ignorado{RS}")
+
+    spinner = Spinner()
+
+    # ── Entrada de comandos en segundo plano (permite /stop durante ejecución) ──
+    cmd_queue = queue.Queue()
+    interactive = sys.stdin.isatty()
+    term_input = TermInput(prompt=f"{B}Tu> {RS}")
+
+    def _reader():
+        if interactive:
+            term_input.run(cmd_queue.put)
+        else:
+            while True:
+                line = sys.stdin.readline()
+                if not line:
+                    cmd_queue.put(None)
+                    return
+                cmd_queue.put(line.rstrip("\n"))
+
+    reader_thread = threading.Thread(target=_reader, daemon=True)
+    reader_thread.start()
+
+    def read_command():
+        while True:
+            try:
+                return cmd_queue.get(timeout=0.25)
+            except queue.Empty:
+                if not reader_thread.is_alive():
+                    return None
+
+    def stop_requested() -> bool:
+        pending = []
+        while True:
+            try:
+                pending.append(cmd_queue.get_nowait())
+            except queue.Empty:
+                break
+        stopped = any(line == "/stop" for line in pending)
+        for line in pending:
+            if line != "/stop":
+                cmd_queue.put(line)
+        return stopped
+
+    # ── Prompt de sistema dinámico (incluye el objetivo activo) ──
+    def make_system_prompt():
+        extra = ""
+        if goal:
+            extra = (
+                "\n\n[OBJETIVO ACTIVO]\n"
+                f"- Meta principal del usuario: {goal}\n"
+                "- Orienta tus acciones y recomendaciones hacia esa meta.\n"
+            )
+        return base_system_prompt + extra
+
+    def stream_with_retry(chat_history, config, spinner):
+        for attempt in range(RETRIES_503):
+            try:
+                yield from provider_iter_content(provider, chat_history, config)
+                return
+            except Exception as e:
+                if not _is_retryable(e):
+                    raise
+                delay = _retry_delay(e)
+                km = getattr(provider, "_key_manager", None)
+                if km is not None and ("429" in str(e) or "quota" in str(e).lower() or "exhausted" in str(e).lower()):
+                    try:
+                        km.handle_error(e, cooldown=int(delay))
+                        provider._rebuild_client()
+                    except Exception:
+                        pass
+                km_str = f"{km.current_key[:8]}..." if km is not None else "?"
+                print(f"  {Y}⚠️  API ocupada, reintentando en {delay:.0f}s ({attempt+1}/{RETRIES_503}) [clave: {km_str}]{RS}")
+                spinner.stop()
+                spinner.start("Esperando a la API...")
+                time.sleep(min(delay, RETRY_MAX_SLEEP))
+        raise RuntimeError(f"La API no respondió tras {RETRIES_503} intentos (quota/ocupada)")
+
+    def ask(chat_history, config):
+        """Stream una respuesta completa; devuelve (parts, function_calls, header_printed, text)."""
+        parts = []
+        function_calls = []
+        text_buffer = ""
+        for chunk in stream_with_retry(chat_history, config, spinner):
+            if stop_requested():
+                raise StopInterrupt()
+            if not chunk.candidates:
+                continue
+            content = chunk.candidates[0].content
+            if not content or not content.parts:
+                continue
+            for p in content.parts:
+                if p is None:
+                    continue
+                if getattr(p, "text", None):
+                    text_buffer += p.text
+                    parts.append(p)
+                fc = getattr(p, "function_call", None)
+                if fc is not None:
+                    function_calls.append(fc)
+                    parts.append(p)
+        return parts, function_calls, bool(text_buffer), text_buffer
+
+    def execute_turn(user_text):
+        chat_history.append(types.Content(role="user", parts=[types.Part.from_text(text=user_text)]))
+        run_hooks("turn_start", user_text=user_text)
+
+        config = types.GenerateContentConfig(
+            system_instruction=make_system_prompt(),
+            tools=registry.get_all_tools_metadata(),
+            temperature=0.2,
+        )
+
+        tool_calls = 0
+        try:
+            for _ in range(MAX_ITERATIONS):
+                spinner.start("Pensando...")
+                try:
+                    parts, function_calls, header_printed, text = ask(chat_history, config)
+                finally:
+                    spinner.stop()
+                if text:
+                    sys.stdout.write(f"\n{G}🤖 [Nex]:{RS}\n")
+                    sys.stdout.flush()
+                    console.print(Markdown(text))
+
+                if not parts:
+                    if not header_printed:
+                        print(f"{Y}⚠️  El modelo no devolvió contenido; reintentando...{RS}")
+
+                assistant_content = types.Content(role="model", parts=parts)
+                chat_history.append(assistant_content)
+
+                if not function_calls:
+                    print()
+                    save_chat_history(chat_history, "cli", workspace=ws)
+                    run_hooks("turn_end", user_text=user_text,
+                              tool_calls=tool_calls, success=True, error=None)
+                    return
+
+                for call in function_calls:
+                    if stop_requested():
+                        raise StopInterrupt()
+                    tool_name = call.name
+                    tool_args = dict(call.args)
+                    tool_args["workspace_root"] = ws
+                    args_repr = ", ".join(f"{k}={str(v)[:40]}" for k, v in dict(call.args).items())
+
+                    run_hooks("tool_before", name=tool_name, args=tool_args)
+                    spinner.start(f"Ejecutando {tool_name}...")
+                    t0 = time.time()
+                    try:
+                        tool = registry.get(tool_name)
+                        raw = tool.execute(**tool_args)
+                    except Exception as e:
+                        raw = {"success": False, "error": str(e)}
+                    duration = time.time() - t0
+                    spinner.stop()
+                    tool_result, issues = validate_tool_result(tool_name, raw)
+                    ok = tool_result.get("success") is not False
+                    print(f"  {B}🛠️  {W}{tool_name}{C}({args_repr}){G if ok else R} {'✓' if ok else '✗'}{RS} {M}{duration:.2f}s{RS}")
+                    if issues:
+                        print(f"  {Y}⚠️  [{tool_name}] {'; '.join(issues)}{RS}")
+                    tool_calls += 1
+                    run_hooks("tool_after", name=tool_name, args=tool_args,
+                              result=tool_result, duration_s=duration,
+                              issues=issues, success=ok)
+                    chat_history.append(types.Content(
+                        role="user",
+                        parts=[types.Part.from_function_response(name=tool_name, response=tool_result)],
+                    ))
+            else:
+                print(f"{Y}⚠️  Límite de iteraciones alcanzado.{RS}")
+                save_chat_history(chat_history, "cli", workspace=ws)
+                run_hooks("turn_end", user_text=user_text,
+                          tool_calls=tool_calls, success=False, error="límite de iteraciones")
+        except StopInterrupt:
+            print(f"\n{Y}⏹️  Ejecución interrumpida.{RS}")
+            run_hooks("turn_end", user_text=user_text,
+                      tool_calls=tool_calls, success=False, error="interrumpido")
+        except KeyboardInterrupt:
+            print(f"\n{Y}⏹️  Cancelado.{RS}")
+        except Exception as e:
+            print(f"\n{R}❌ Error: {e}{RS}")
+            if "API key" in str(e) or "403" in str(e):
+                print(f"{Y}💡 Verifica GEMINI_API_KEY en .env{RS}")
+            save_chat_history(chat_history, "cli", workspace=ws)
+            run_hooks("turn_end", user_text=user_text,
+                      tool_calls=tool_calls, success=False, error=str(e))
+
+    # ── Helpers de los comandos ──
+    def show_help():
+        print(f"""{C}Comandos disponibles:{RS}
+  {B}/new{RS} o {B}/reset{RS}    Nueva sesión, contexto fresco (borra historial y objetivo)
+  {B}/stop{RS}             Detener la ejecución del agente en curso
+  {B}/compact{RS}          Comprimir el contexto de la conversación
+  {B}/help{RS}             Este listado
+  {B}/status{RS}           Ver estado (modelo, claves, mensajes, objetivo)
+  {B}/model <nombre>{RS}   Cambiar modelo en caliente (ej: gemini-2.5-pro, /model list)
+  {B}/providers{RS}        Ver estado de todos los proveedores LLM
+  {B}/connect <p>{RS}      Conectar y activar un provider (/connect ollama gemma3:1b,
+                           flags: --key K --url U --model M --start)
+  {B}/use <p> [m]{RS}      Cambiar de provider/modelo solo para esta sesión
+  {B}/traces [n]{RS}       Ver las últimas n trazas/ejecuciones de tools
+  {B}/retry{RS}            Reintentar la última pregunta
+  {B}/undo{RS}             Quitar el último intercambio
+  {B}/goal <texto>{RS}     Definir un objetivo que el agente persigue (/goal clear para borrar)
+  {B}/tools{RS}            Listar herramientas disponibles
+  {B}/clear{RS}            Limpiar el historial de la sesión
+  {B}exit{RS}              Salir""")
+
+    def show_input_hint():
+        console.print(f"  {M}💡 En el prompt escribe '/' y se abre una ventana flotante encima con el autocompletado (↑/↓ navega, Tab completa, Enter acepta).{RS}")
+
+    def history_to_text(history) -> str:
+        lines = []
+        for c in history:
+            role = c.role
+            label = "Usuario" if role == "user" else ("Asistente" if role == "model" else role)
+            texts = [p.text for p in getattr(c, "parts", []) if getattr(p, "text", None)]
+            if texts:
+                lines.append(f"{label}: {' '.join(texts)}")
+        return "\n".join(lines)
+
+    def history_chars(history) -> int:
+        total = 0
+        for c in history:
+            for p in getattr(c, "parts", []):
+                text = getattr(p, "text", None)
+                if text:
+                    total += len(text)
+        return total
+
+    def last_user_turn(history):
+        for i in range(len(history) - 1, -1, -1):
+            c = history[i]
+            if getattr(c, "role", None) == "user" and any(
+                getattr(p, "text", None) for p in getattr(c, "parts", [])
+            ):
+                return i
+        return None
+
+    def do_compact():
+        nonlocal chat_history
+        if not chat_history:
+            print(f"{Y}⚠️  No hay conversación que comprimir.{RS}")
+            return
+        dump = history_to_text(chat_history)
+        prompt = (
+            "Resume la conversación en un resumen compacto en el idioma del usuario "
+            "(máximo 200 palabras). Conserva los objetivos, decisiones técnicas, "
+            "archivos tocados y lo que queda pendiente. NO inventes hechos:\n\n"
+            f"{dump}"
+        )
+        spinner.start("Comprimiendo contexto...")
+        try:
+            resp = provider.generate_content(
+                contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
+                config=types.GenerateContentConfig(
+                    system_instruction=make_system_prompt(), temperature=0.2
+                ),
+            )
+            summary = (resp.text or "").strip()
+        except Exception as e:
+            spinner.stop()
+            print(f"{R}❌ No se pudo comprimir el contexto: {e}{RS}")
+            return
+        spinner.stop()
+        if not summary:
+            print(f"{Y}⚠️  Resumen vacío; el contexto no cambia.{RS}")
+            return
+        chat_history = [
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=f"[CONTEXTO COMPRIMIDO DE SESIONES ANTERIORES]\n{summary}")],
+            )
+        ]
+        save_chat_history(chat_history, "cli", workspace=ws)
+        print(f"{G}✓ Contexto comprimido ({len(summary.split())} palabras).{RS}")
+
+    def do_status():
+        print(f"{C}Estado del agente:{RS}")
+        print(f"  Modelo:          {provider.model}")
+        print(f"  Workspace:       {ws}")
+        print(f"  Idioma:          {lang}")
+        chars = history_chars(chat_history)
+        print(f"  Mensajes:        {len(chat_history)}  (~{chars} caracteres, ≈{chars // 4} tokens estimados)")
+        km = getattr(provider, "_key_manager", None)
+        if km is not None:
+            print(f"  API keys:        {km.key_count} disponibles (actual: {W}{km.current_key[:8]}...{RS})")
+        else:
+            print("  API keys:        —")
+        print(f"  Objetivo activo: {goal or '(ninguno)'}")
+        print(f"  Hooks:           {sum(len(v) for v in _HOOKS.values())} ({','.join(_HOOKS.keys())})")
+        if os.path.isfile(TRACES_FILE):
+            try:
+                with open(TRACES_FILE, "r", encoding="utf-8") as f:
+                    trace_count = len(f.read().splitlines())
+            except OSError:
+                trace_count = 0
+            print(f"  Trazas:          {trace_count} registradas (ver /traces)")
+
+    # ── Bucle principal ──
+    try:
+        while True:
+            if interactive:
+                term_input.ask()
+            else:
+                sys.stdout.write(f"{B}Tu> {RS}")
+                sys.stdout.flush()
+
+            user_input = read_command()
+            if user_input is None:
+                print(f"\n{W}👋 Goodbye!{RS}")
+                run_hooks("session_end", workspace=ws)
+                save_chat_history(chat_history, "cli", workspace=ws)
+                break
+            user_input = user_input.strip()
+            if not user_input:
+                continue
+
+            cmd = user_input.split()[0].lower()
+
+            if cmd in ("exit", "quit"):
+                print(f"{W}👋 Goodbye!{RS}")
+                run_hooks("session_end", workspace=ws)
+                save_chat_history(chat_history, "cli", workspace=ws)
+                break
+            elif cmd == "/help":
+                show_help()
+                show_input_hint()
+            elif cmd == "/tools":
+                print(f"{C}Herramientas ({len(registry.list_tools())}):{RS}")
+                for i, t in enumerate(registry.list_tools(), 1):
+                    print(f"  {B}{i:2d}.{RS} {t}")
+            elif cmd in ("/new", "/reset"):
+                chat_history = []
+                goal = None
+                save_chat_history(chat_history, "cli", workspace=ws)
+                print(f"{G}✓ Nueva sesión con contexto fresco.{RS}")
+            elif cmd == "/clear":
+                chat_history = []
+                print(f"{G}✓ Historial de la sesión limpio.{RS}")
+            elif cmd == "/status":
+                do_status()
+            elif cmd == "/traces":
+                parts = user_input.split()
+                try:
+                    n = int(parts[1]) if len(parts) > 1 else 8
+                except ValueError:
+                    n = 8
+                if not os.path.isfile(TRACES_FILE):
+                    print(f"{Y}⚠️  No hay trazas registradas aún.{RS}")
+                else:
+                    try:
+                        with open(TRACES_FILE, "r", encoding="utf-8") as f:
+                            lines = f.read().splitlines()
+                    except OSError:
+                        lines = []
+                    if not lines:
+                        print(f"{Y}⚠️  No hay trazas registradas aún.{RS}")
+                        continue
+                    print(f"{C}Últimas trazas ({min(n, len(lines))}):{RS}")
+                    for line in lines[-n:]:
+                        try:
+                            e = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        ts = time.strftime("%H:%M:%S", time.localtime(e.get("ts", time.time())))
+                        mark = "✓" if e.get("success") else "✗"
+                        issues = " ⚠️" if e.get("issues") else ""
+                        print(f"  {B}{ts}{RS} {mark} {W}{e.get('tool')}{RS} {e.get('duration_s')}s{M}{issues}{RS}")
+            elif cmd == "/stop":
+                print(f"{G}✓ Sin ejecución en curso; nada que detener.{RS}")
+            elif cmd == "/undo":
+                idx = last_user_turn(chat_history)
+                if idx is None:
+                    print(f"{Y}⚠️  No hay intercambio que deshacer.{RS}")
+                else:
+                    removed = len(chat_history) - idx
+                    del chat_history[idx:]
+                    save_chat_history(chat_history, "cli", workspace=ws)
+                    print(f"{G}✓ Último intercambio eliminado ({removed} mensajes).{RS}")
+            elif cmd == "/retry":
+                idx = last_user_turn(chat_history)
+                if idx is None:
+                    print(f"{Y}⚠️  No hay nada que reintentar.{RS}")
+                    continue
+                last_text = next(
+                    (p.text for p in chat_history[idx].parts if getattr(p, "text", None)), ""
+                )
+                del chat_history[idx:]
+                if not last_text:
+                    print(f"{Y}⚠️  La última intervención no tiene texto.{RS}")
+                    continue
+                print(f"{M}↻ Reintentando: {W}{last_text}{RS}")
+                execute_turn(last_text)
+            elif cmd == "/model":
+                parts = user_input.split()
+                if len(parts) >= 2 and parts[1] in ("list", "ls"):
+                    print(f"{C}Modelos disponibles:{RS}")
+                    for m in provider.list_models():
+                        print(f"  {B}{m}{RS}")
+                elif len(parts) >= 2:
+                    provider.model = parts[1]
+                    print(f"{G}✓ Modelo cambiado a: {W}{provider.model}{RS}")
+                else:
+                    print(f"{G}Modelo actual: {W}{provider.model}{RS}")
+            elif cmd == "/providers":
+                cmd_providers()
+            elif cmd == "/connect":
+                from llm.connect import (
+                    PROVIDERS,
+                    connect_provider,
+                    provider_status,
+                    start_freellm,
+                )
+
+                target, flags = parse_connect_text(user_input[len("/connect"):].strip())
+                if not target or target not in PROVIDERS:
+                    print(f"{R}❌ Uso: /connect <provider> [--key K] [--url U] [--model M] [--start]{RS}")
+                    print(f"{Y}💡 Disponibles: {W}{', '.join(PROVIDERS)}{RS}")
+                    continue
+                st = provider_status(target)
+                print(f"{C}Conectando {W}{target}{RS} — {PROVIDERS[target]['label']} ({PROVIDERS[target]['kind']})")
+                if (
+                    st["kind"] == "local"
+                    and not st["reachable"]
+                    and target == "freellm"
+                    and flags.get("start")
+                ):
+                    print(f"  {C}→{RS} Arrancando FreeLLM...")
+                    proc, msg = start_freellm()
+                    print(f"  {msg}")
+                try:
+                    result = connect_provider(
+                        target,
+                        api_key=flags.get("key"),
+                        base_url=flags.get("url"),
+                        model=flags.get("model"),
+                    )
+                except RuntimeError as e:
+                    print(f"{R}❌ {e}{RS}")
+                    continue
+                for step in result["steps"]:
+                    print(f"  {G}✓{RS} {step}")
+                try:
+                    provider = build_provider(target)
+                except Exception as e:
+                    print(f"{Y}⚠️  Conectado, pero no se pudo activar en esta sesión: {e}{RS}")
+                    continue
+                print(f"{G}✅ {target} activo en esta sesión{RS} — {W}{provider.model}{RS}")
+            elif cmd == "/use":
+                from llm.connect import PROVIDERS
+
+                parts = user_input.split()
+                name = parts[1] if len(parts) > 1 else ""
+                model = parts[2] if len(parts) > 2 else None
+                if name not in PROVIDERS:
+                    print(f"{R}❌ Provider desconocido: {W}{name}{RS}  Disponibles: {', '.join(PROVIDERS)}{RS}")
+                    continue
+                try:
+                    provider = build_provider(name, model)
+                except Exception as e:
+                    print(f"{R}❌ No se pudo usar {name}: {e}{RS}")
+                    continue
+                print(f"{G}✓ Sesión cambiada a: {W}{name} · {provider.model}{RS} (no persiste; usa /connect para guardarlo)")
+            elif cmd == "/goal":
+                rest = user_input[len(cmd):].strip()
+                if not rest:
+                    if goal:
+                        print(f"{G}Objetivo activo: {W}{goal}{RS}")
+                    else:
+                        print(f"{Y}Uso: /goal <texto>   (o /goal clear para borrarlo){RS}")
+                elif rest.lower() in ("clear", "ninguno", "none"):
+                    goal = None
+                    print(f"{G}✓ Objetivo borrado.{RS}")
+                else:
+                    goal = rest
+                    print(f"{G}✓ Objetivo definido: {W}{goal}{RS}")
+            elif cmd == "/compact":
+                do_compact()
+            elif cmd.startswith("/"):
+                print(f"{Y}⚠️  Comando desconocido: {W}{cmd}{Y}   (prueba /help){RS}")
+            else:
+                execute_turn(user_input)
+    except KeyboardInterrupt:
+        print(f"\n{W}👋 Goodbye!{RS}")
+        run_hooks("session_end", workspace=ws)
+        save_chat_history(chat_history, "cli", workspace=ws)
+
+
+def cmd_providers():
+    from llm.connect import all_providers_status
+
+    print(f"{C}Proveedores LLM:{RS}")
+    print(f"  {'Provider':<12} {'Estado':<28} Detalles")
+    for st in all_providers_status():
+        name = st["name"]
+        if st["kind"] == "local":
+            if st["reachable"]:
+                state = f"{G}✓{RS} accesible"
+                models = ", ".join(st["models"][:6]) or "sin modelos"
+            else:
+                state = f"{R}✗{RS} sin conexión"
+                models = st["base_url"]
+            status_line = f"{state}  {M}{models}{RS}"
+        else:
+            if st["configured"]:
+                state = f"{G}✓{RS} key {C}{st['key_masked']}{RS}"
+                models = ", ".join(st["models"][:6]) or "—"
+            else:
+                state = f"{Y}⚠️  sin API key{RS}"
+                models = f"({st['base_url'] or 'cloud'})".replace("()", "")
+            status_line = f"{state}  {M}{models}{RS}"
+        active = f" {B}← activo{RS}" if st["active"] else ""
+        print(f"  {W}{name:<12}{RS} {status_line}{active}")
+    print(f"\n{C}Conectar:{RS}  nex connect <provider> [--key K] [--url URL] [--model M] [--start]")
+
+
+def cmd_connect(target: str | None, args) -> None:
+    from llm.connect import PROVIDERS, connect_provider, provider_status, start_freellm
+
+    if not target:
+        print(f"{R}❌ Uso: nex connect <provider>  (disponibles: {', '.join(PROVIDERS)}){RS}")
+        return
+    if target not in PROVIDERS:
+        print(f"{R}❌ Provider '{target}' desconocido. Disponibles: {', '.join(PROVIDERS)}{RS}")
+        return
+
+    info = PROVIDERS[target]
+    st = provider_status(target)
+    print(f"{C}Conectando {W}{target}{RS} — {info['label']} ({info['kind']})")
+    if info.get("env_var"):
+        if st["configured"]:
+            hint = f" ({st['key_masked']})" if st.get("key_masked") else ""
+            print(f"  {G}✓{RS} API key configurada{hint}")
+        else:
+            print(f"  {Y}⚠️  sin API key configurada{RS}")
+
+    if info["kind"] == "local" and not st["reachable"]:
+        print(f"  {R}✗{RS} no accesible en {st['base_url']}")
+        if target == "freellm":
+            if args.start:
+                print(f"  {C}→{RS} Arrancando FreeLLM...")
+                proc, msg = start_freellm()
+                print(f"  {msg}")
+                if proc is None or proc.poll() is not None:
+                    print(f"{R}❌ FreeLLM no está disponible tras el arranque.{RS}")
+                    return
+            else:
+                answer = input(f"  ¿Arrancar FreeLLM ahora? [y/N] ").strip().lower()
+                if answer != "y":
+                    print(f"{Y}💡 Prueba: nex connect freellm --start   o  ./start-freellm.sh{RS}")
+                    return
+                proc, msg = start_freellm()
+                print(f"  {msg}")
+    elif st["reachable"]:
+        print(f"  {G}✓{RS} accesible en {st['base_url']}")
+
+    if info["kind"] == "cloud" and not st["configured"] and not args.key:
+        api_key = input(f"  {C}API key para {target} (no se muestra):{RS} ").strip()
+        if not api_key:
+            print(f"{R}❌ Sin API key no se puede conectar {target}.{RS}")
+            return
+        args.key = api_key
+
+    try:
+        result = connect_provider(
+            target,
+            api_key=args.key,
+            base_url=args.url,
+            model=args.model,
+        )
+    except RuntimeError as e:
+        print(f"{R}❌ {e}{RS}")
+        return
+
+    for step in result["steps"]:
+        print(f"  {G}✓{RS} {step}")
+    st = result["status"]
+    print(f"\n{G}✅ {target} conectado{RS} — proveedor activo."
+          f" Prueba: {B}nex chat --provider {target}{RS}")
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="nex", description="Nex - AI-powered coding assistant")
+    parser.add_argument("command", nargs="?", choices=["chat", "version", "set-workspace", "providers", "connect", "help"], default="chat")
+    parser.add_argument("target", nargs="?", help="Provider para 'connect' (freellm, ollama, gemini, openai, anthropic, deepseek)")
+    parser.add_argument("--provider", default=None, help="Provider para el chat (si no, el configurado en settings)")
+    parser.add_argument("--model", default=None, help="Modelo a usar")
+    parser.add_argument("--key", default=None, help="API key del provider (solo 'connect')")
+    parser.add_argument("--url", default=None, help="Base URL del provider (solo 'connect'; FreeLLM/Ollama)")
+    parser.add_argument("--start", action="store_true", help="Arrancar FreeLLM si no responde (solo 'connect freellm')")
+    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--no-frontend", action="store_true")
+    args = parser.parse_args()
+
+    if args.command == "version":
+        from shared.version import VERSION
+        print(f"Nex version: {VERSION}")
+        return
+
+    if args.command == "providers":
+        cmd_providers()
+        return
+
+    if args.command == "connect":
+        cmd_connect(args.target, args)
+        return
+
+    if args.command == "set-workspace":
+        from storage.settings import save_workspace_path
+        path = input("Ruta del workspace: ").strip().strip('"').strip("'")
+        if os.path.isdir(path):
+            p = save_workspace_path(path)
+            print(f"{G}✓ Workspace set to: {p}{RS}")
+        else:
+            print(f"{R}❌ La ruta '{path}' no existe{RS}")
+        return
+
+    if args.command == "help":
+        print("""
+Nex - AI Terminal Assistant
+
+Comandos:
+  nex                        Chat interactivo con IA (streaming)
+  nex providers              Estado de todos los proveedores LLM
+  nex connect <provider>     Conectar un provider (freellm, ollama, gemini,
+                             openai, anthropic, deepseek)
+                             Flags: --key, --url, --model, --start (FreeLLM)
+  nex version                Versión
+  nex set-workspace          Configurar workspace
+  nex --help                 Ayuda
+
+Dentro del chat:
+  /new, /reset               Nueva sesión (contexto fresco)
+  /stop                      Detener la ejecución actual
+  /compact                   Comprimir el contexto de la conversación
+  /help                      Listar comandos disponibles
+  /status                    Ver estado (modelo, claves, modo, mensajes)
+  /model <nombre>            Cambiar modelo (/model list)
+  /providers                 Estado de todos los proveedores LLM
+  /connect <provider>        Conectar y activar un provider desde el chat
+                             (flags: --key K, --url U, --model M, --start)
+  /use <provider> [model]    Cambiar de provider/modelo solo para esta sesión
+  /traces [n]                Ver las últimas ejecuciones de tools
+  /retry                     Reintentar la última pregunta
+  /undo                      Quitar el último intercambio
+  /goal <texto>              Definir un objetivo (/goal clear)
+  /tools                     Listar herramientas
+  /clear                     Limpiar historial
+  exit                       Salir""")
+        return
+
+    run_chat(args)
+
+
+if __name__ == "__main__":
+    main()
