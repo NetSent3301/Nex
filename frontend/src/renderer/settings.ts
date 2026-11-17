@@ -2,7 +2,6 @@ import type { ProviderInfo } from "../types";
 import type { Locale } from "../i18n/locales";
 import { t, setLocale, applyTranslationsToDOM } from "../i18n/index";
 import { API_BASE, apiGet, apiPost } from "./api";
-import { refreshAlertsFromSettings } from "./watch";
 import { $, setSelect, setInput, setCheck } from "./ui";
 
 let currentProviders: ProviderInfo[] = [];
@@ -76,7 +75,10 @@ export function initSettings(): void {
     saveSetting("compact_mode", (e.target as HTMLInputElement).checked);
   });
   document.getElementById("setting-orb-animation")?.addEventListener("change", (e) => {
-    saveSetting("orb_animation", (e.target as HTMLInputElement).checked);
+    const on = (e.target as HTMLInputElement).checked;
+    saveSetting("orb_animation", on);
+    (window as any).__nexOrb?.setEnabled(on);
+    (window as any).__miniOrb?.setEnabled(on);
   });
   document.getElementById("setting-accent-color")?.addEventListener("input", (e) => {
     applyAccentColor((e.target as HTMLInputElement).value);
@@ -103,28 +105,12 @@ export function initSettings(): void {
     saveSetting("confirm_delete", (e.target as HTMLInputElement).checked);
   });
 
-  // ── Security (Nex Watch + explainer + scan scope) ──
-  document.getElementById("setting-nexwatch-enabled")?.addEventListener("change", (e) => {
-    saveSetting("nexwatch_enabled", (e.target as HTMLInputElement).checked);
-  });
-  document.getElementById("setting-nexwatch-interval")?.addEventListener("change", (e) => {
-    saveSetting("nexwatch_interval", parseInt((e.target as HTMLInputElement).value) || 30);
-  });
-  document.getElementById("setting-nexwatch-threshold")?.addEventListener("change", (e) => {
-    saveSetting("nexwatch_mass_delete_threshold", parseInt((e.target as HTMLInputElement).value) || 10);
-  });
+  // ── Security (explainer + scan scope) ──
   document.getElementById("setting-explain-mode")?.addEventListener("change", (e) => {
     saveSetting("explain_mode", (e.target as HTMLInputElement).checked);
   });
   document.getElementById("setting-scan-allowlist")?.addEventListener("change", (e) => {
     saveSetting("scan_allowlist", (e.target as HTMLInputElement).value.trim());
-  });
-  document.getElementById("alerts-refresh-btn")?.addEventListener("click", () => {
-    refreshAlertsFromSettings();
-  });
-  document.getElementById("alerts-clear-btn")?.addEventListener("click", async () => {
-    await fetch(`${API_BASE}/api/v1/alerts/clear`, { method: "POST" });
-    refreshAlertsFromSettings();
   });
   document.getElementById("quick-reset-btn")?.addEventListener("click", async () => {
     if (!confirm("Reset appearance to defaults?")) return;
@@ -350,6 +336,9 @@ function applySettingsToUI(data: any): void {
   setInput("setting-max-sessions", data.max_sessions);
   setCheck("setting-compact-mode", data.compact_mode);
   setCheck("setting-orb-animation", data.orb_animation);
+  const orbOn = data.orb_animation !== false;
+  (window as any).__nexOrb?.setEnabled(orbOn);
+  (window as any).__miniOrb?.setEnabled(orbOn);
 
   if (data.accent_color) {
     applyAccentColor(data.accent_color);
@@ -384,14 +373,9 @@ function applySettingsToUI(data: any): void {
   setInput("setting-max-tool-calls", data.max_tool_calls);
   setInput("setting-auto-save", data.auto_save_interval);
 
-  setCheck("setting-nexwatch-enabled", data.nexwatch_enabled !== false);
-  setInput("setting-nexwatch-interval", data.nexwatch_interval ?? 30);
-  setInput("setting-nexwatch-threshold", data.nexwatch_mass_delete_threshold ?? 10);
   setCheck("setting-explain-mode", data.explain_mode !== false);
   const allowlistInput = document.getElementById("setting-scan-allowlist") as HTMLInputElement;
   if (allowlistInput) allowlistInput.value = data.scan_allowlist || "127.0.0.1";
-
-  refreshAlertsFromSettings();
 }
 
 function initSidebarDrag(): void {

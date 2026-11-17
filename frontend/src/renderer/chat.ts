@@ -6,6 +6,7 @@ import {
   getActiveSession, getActiveSessionId, getSessions,
   renderSidebar, showWelcome, hideWelcome, persistState,
 } from "./sessions";
+import { emitOrb } from "./orb-engine";
 
 const chatContainerEl = $<HTMLElement>("chat-container");
 const messageInput = $<HTMLTextAreaElement>("message-input");
@@ -209,6 +210,7 @@ export async function sendMessage(): Promise<void> {
   }
 
   isSending = true;
+  emitOrb("send");
   sendBtn.disabled = true;
   stopBtn.classList.add("visible");
 
@@ -273,26 +275,35 @@ export async function sendMessage(): Promise<void> {
 
         if (eventType === "tool_start") {
           const d = JSON.parse(dataStr);
+          emitOrb("tool_start", { tool: d.tool });
           addToolCard(d.tool, d.args, d.description);
         } else if (eventType === "tool_end") {
           const d = JSON.parse(dataStr);
+          emitOrb("tool_end", { ok: !(d.result && d.result.error) });
           const cards = document.querySelectorAll(".tool-call");
           const lastCard = cards[cards.length - 1];
           if (lastCard) updateToolCard(lastCard.id, d.result);
         } else if (eventType === "text") {
-          assistantText += JSON.parse(dataStr);
+          const chunk = JSON.parse(dataStr);
+          emitOrb("text", { chars: chunk.length });
+          assistantText += chunk;
           const bubble = document.getElementById("streaming-bubble");
           if (bubble) bubble.textContent = assistantText;
           scrollToBottom();
         } else if (eventType === "done") {
+          emitOrb("done");
           finalizeStreaming(assistantText);
         }
       }
     }
 
-    if (assistantText) finalizeStreaming(assistantText);
+    if (assistantText) {
+      emitOrb("done");
+      finalizeStreaming(assistantText);
+    }
   } catch (error: unknown) {
     if (error instanceof DOMException && error.name === "AbortError") return;
+    emitOrb("error");
     removeLoading();
     const existing = document.getElementById("streaming-msg");
     if (existing) existing.remove();
@@ -312,6 +323,7 @@ export function stopExecution(): void {
     streamAbortController.abort();
     streamAbortController = null;
   }
+  emitOrb("stop");
   isSending = false;
   sendBtn.disabled = false;
   stopBtn.classList.remove("visible");

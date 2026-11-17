@@ -14,7 +14,7 @@ import {
 } from "./renderer/sessions";
 import { sendMessage, stopExecution, renderMessages, appendMessage } from "./renderer/chat";
 import { openSpotlight, closeSpotlight } from "./renderer/spotlight";
-import { initWatch } from "./renderer/watch";
+import { OrbEngine, emitOrb } from "./renderer/orb-engine";
 
 const chatContainerEl = $<HTMLElement>("chat-container");
 const messageInput = $<HTMLTextAreaElement>("message-input");
@@ -30,9 +30,10 @@ const memoryBar = $<HTMLElement>("memory-bar");
 const memoryValue = $<HTMLElement>("memory-value");
 const contextBar = $<HTMLElement>("context-bar");
 const contextValue = $<HTMLElement>("context-value");
-const agentDot = $<HTMLElement>("agent-dot");
 const agentRing = $<HTMLElement>("agent-ring");
 const agentStatus = $<HTMLElement>("agent-status");
+
+let miniOrb: OrbEngine | null = null;
 
 // ── WELCOME ──
 let welcomeTypingTimer: ReturnType<typeof setTimeout> | null = null;
@@ -86,8 +87,9 @@ function changeWelcomeMessage(): void {
 function initPlasma(): void {
   const canvas = document.getElementById("plasma-canvas") as HTMLCanvasElement;
   if (canvas) {
-    const core = new PlasmaCore(canvas);
-    core.start();
+    const orb = new OrbEngine(canvas, { mode: "full" });
+    orb.start();
+    (window as any).__nexOrb = orb;
   }
 }
 
@@ -106,15 +108,19 @@ async function fetchMetrics(): Promise<void> {
     contextBar.style.width = ctxPct + "%";
     contextValue.textContent = ctxPct + "%";
     const online = data.agent_status === "online";
-    agentDot.className = `agent-dot ${online ? "bg-green-500" : "bg-red-500"}`;
-    agentDot.style.boxShadow = online ? "0 0 10px rgba(34, 197, 94, 0.4)" : "0 0 10px rgba(239, 68, 68, 0.4)";
+    if (miniOrb) {
+      if (online) miniOrb.setState("idle", { sticky: true });
+      else miniOrb.setState("error", { sticky: true });
+    }
     agentRing.setAttribute("stroke", online ? "#22c55e" : "#ef4444");
     agentStatus.textContent = online ? "Online" : data.agent_status === "busy" ? "Ocupado" : "Offline";
     agentStatus.className = `agent-state ${online ? "text-green-400/70" : "text-red-400/70"}`;
     const cpuPct = Math.min(data.cpu, 100);
     const ringOffset = 72.2 - (72.2 * cpuPct) / 100;
     agentRing.style.strokeDashoffset = String(ringOffset);
-  } catch {}
+  } catch {
+    if (miniOrb) miniOrb.setState("error", { sticky: true });
+  }
 }
 
 function initMetrics(): void {
@@ -242,10 +248,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
   initWelcome();
   initPlasma();
+  const miniCanvas = document.getElementById("mini-orb") as HTMLCanvasElement | null;
+  if (miniCanvas) {
+    miniOrb = new OrbEngine(miniCanvas, { mode: "mini" });
+    miniOrb.start();
+    (window as any).__miniOrb = miniOrb;
+  }
   initSettings();
   initMetrics();
   initWorkspace();
-  initWatch();
   initFileAttach();
   initDragDrop();
   initPasteImage();
@@ -316,9 +327,14 @@ document.addEventListener("DOMContentLoaded", () => {
                     (sendMode === "enter" && !e.shiftKey);
     if (isEnter && withMod) { e.preventDefault(); sendMessage(); }
   });
+  let typingThrottle: ReturnType<typeof setTimeout> | null = null;
   messageInput.addEventListener("input", () => {
     messageInput.style.height = "auto";
     messageInput.style.height = Math.min(messageInput.scrollHeight, 160) + "px";
+    if (!typingThrottle) {
+      emitOrb("typing");
+      typingThrottle = setTimeout(() => { typingThrottle = null; }, 120);
+    }
   });
   sendBtn.addEventListener("click", sendMessage);
   stopBtn.addEventListener("click", stopExecution);
